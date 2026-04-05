@@ -18,5 +18,9 @@ env/
 
 # Jupyter
 .ipynb_checkpoints/
-
->>>>>>> 4485fbf (initial commit)
+.env
+.vscode/
+.idea/
+.venv/
+venv/
+__pycache__/

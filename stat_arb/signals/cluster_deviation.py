@@ -175,12 +175,21 @@ class ClusterDeviationStrategy:
                 if n_short > 0:
                     w[short_mask] = -1.0 / n_short
 
-                # Cluster neutral
-                w = w - w.mean()
+                # Cluster-neutralize over the SELECTED names only; demeaning
+                # all cluster members would open positions in names that never
+                # crossed the entry threshold, inflating turnover
+                selected = w != 0.0
+                if selected.any():
+                    w[selected] = w[selected] - w[selected].mean()
 
                 weights.loc[date, cluster_cols] = w
 
-        # Dollar neutral
-        weights = weights.sub(weights.mean(axis=1), axis=0)
+        # Dollar-neutralize across traded positions only (untraded names
+        # must stay at exactly zero weight)
+        traded_mask = weights != 0.0
+        n_traded = traded_mask.sum(axis=1)
+        net = weights.sum(axis=1)
+        adjust = (net / n_traded.replace(0, np.nan)).fillna(0.0)
+        weights = weights.sub(adjust, axis=0).where(traded_mask, 0.0)
 
         return weights

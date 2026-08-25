@@ -154,7 +154,7 @@ class CostAnalyzer:
     def analyze_cost_by_period(
         gross_returns: pd.Series,
         costs: pd.Series,
-        freq: str = 'M',
+        freq: str = 'ME',
     ) -> pd.DataFrame:
         """
         Analyze costs by time period.

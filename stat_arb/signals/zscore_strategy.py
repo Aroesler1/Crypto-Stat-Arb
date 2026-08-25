@@ -75,9 +75,15 @@ class ZScoreStrategy:
     def compute_volatility_weights(
         self,
         returns: pd.DataFrame,
+        lag: int = 1,
     ) -> pd.DataFrame:
         """
         Compute inverse volatility weights.
+
+        Lagged by `lag` days so the weight applied on day t only uses
+        volatility estimated through t-lag (same convention as the signal;
+        weights held on day t earn the day-t return, so an unlagged vol
+        estimate would leak same-day information into position sizing).
         """
         vol = returns.rolling(window=self.vol_lookback, min_periods=10).std()
         inv_vol = 1.0 / (vol + 1e-8)
@@ -85,7 +91,7 @@ class ZScoreStrategy:
         # Normalize cross-sectionally
         inv_vol_norm = inv_vol.div(inv_vol.sum(axis=1), axis=0)
 
-        return inv_vol_norm
+        return inv_vol_norm.shift(lag)
 
     def generate_target_weights(
         self,
@@ -164,13 +170,23 @@ class ZScoreStrategy:
                     vol_w = vol_w / vol_w.sum()  # Re-normalize
                     w = w * vol_w * len(cluster_tokens)  # Scale
 
-                # Ensure cluster-neutral (sum = 0)
-                w = w - w.mean()
+                # Re-impose cluster neutrality on the TRADED names only.
+                # Demeaning over all cluster members would assign small
+                # offsetting weights to names the quantile/threshold rule
+                # never selected, inflating turnover and cost drag.
+                traded = w != 0.0
+                if traded.any():
+                    w[traded] = w[traded] - w[traded].mean()
 
                 weights.loc[date, cluster_tokens] = w
 
-        # Ensure dollar-neutral across all positions
-        weights = weights.sub(weights.mean(axis=1), axis=0)
+        # Dollar-neutralize across traded positions only (untraded names
+        # must stay at exactly zero weight).
+        traded_mask = weights != 0.0
+        n_traded = traded_mask.sum(axis=1)
+        net = weights.sum(axis=1)
+        adjust = (net / n_traded.replace(0, np.nan)).fillna(0.0)
+        weights = weights.sub(adjust, axis=0).where(traded_mask, 0.0)
 
         return weights
 

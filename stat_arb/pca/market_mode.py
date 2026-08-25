@@ -42,7 +42,11 @@ class MarketModeExtractor:
         -------
         self
         """
-        X = returns.dropna().values
+        # Drop only all-NaN rows and zero-fill remaining gaps. A plain
+        # dropna() would discard every row containing a single NaN, which
+        # on a ragged crypto panel (staggered listings) can silently gut
+        # the training sample.
+        X = returns.dropna(how='all').fillna(0.0).values
 
         # Standardize if requested
         if self.standardize:

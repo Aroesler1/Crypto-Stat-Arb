@@ -1,5 +1,40 @@
 # Stat-Arb Backtest: Final Report
 
+## 2026-08 Revision (supersedes the figures below)
+
+All results were regenerated after a signal-integrity pass. Fixes, each with a
+regression test in `tests/`:
+
+1. **Lagged inverse-vol sizing.** Position sizing previously used same-day volatility; it is now lagged one day like the signal.
+2. **No weight smearing.** Cluster/dollar neutralization previously assigned small offsetting weights to every token, including names the entry rule never selected; neutralization now applies only to traded names.
+3. **PCA fit on ragged panels.** The market-mode fit no longer drops every row containing a single NaN.
+4. **Fresh-environment reproducibility.** k-NN graph construction crashed under pandas 3.x copy-on-write, so the previous checked-in numbers could not be reproduced from a clean clone. Fixed and vectorized.
+5. **Deflated Sharpe Ratio.** The leaderboard now reports the Bailey/Lopez de Prado DSR with the sweep itself as the multiple-testing pool, plus a financing-carry stress (perp funding / borrow proxy).
+
+### Regenerated headline results (walk-forward OOS, 2024-05-30 to 2025-05-28)
+
+Phase 1 baseline (SPONGE k=3, z-score MR, H=5, L=60):
+- Gross Sharpe **1.67**, net Sharpe @ 50 bps **-2.16**, break-even cost **21.0 bps**
+- PSR 0.02, DSR 0.00, avg daily turnover 23%, max drawdown -27.7%
+
+Phase 2 sweep (16 configurations):
+- Best gross: SPONGE k=6 z-score MR, gross Sharpe **4.22**, net @ 50 bps **-1.21**, DSR 0.00
+- Best net: Cluster Deviation SPONGE k=3, gross **3.10**, net @ 50 bps **0.01**, break-even **50.3 bps**, DSR **0.09**
+
+### Honest conclusion
+
+The clustering signal carries real gross structure (positive gross Sharpe in
+all 16 configurations), but no configuration survives realistic crypto taker
+costs plus financing carry, and the deflated Sharpe of the best net
+configuration (0.09) says the selected result is indistinguishable from the
+best of 16 noise strategies. This framework is a negative research result with
+a clean methodology, not a tradable strategy. The prior version of this report
+overstated gross Sharpe (2.7-3.3 in the headline configs) due to fixes 1-2.
+
+---
+
+## Original report (historical, pre-revision numbers)
+
 ## Executive Summary
 
 Executed low-cap crypto stat-arb using signed k-NN correlation graph, SPONGE/BNC/signed spectral clustering, and PCA market-mode removal. Daily walk-forward OOS from May 2024 to May 2025.

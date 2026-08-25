@@ -13,8 +13,9 @@ from stat_arb.backtest.statistics import (
 def test_psr_of_zero_mean_noise_is_half():
     rng = np.random.default_rng(0)
     r = pd.Series(rng.normal(0.0, 0.01, size=5000))
+    r = r - r.mean()  # exactly zero Sharpe; PSR is sharp in n so demean explicitly
     psr = probabilistic_sharpe_ratio(r)
-    assert 0.35 < psr < 0.65
+    assert abs(psr - 0.5) < 0.02
 
 
 def test_psr_increases_with_mean():

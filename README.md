@@ -38,6 +38,12 @@ Run the clustering-method sweep:
 python stat_arb/run_phase2.py
 ```
 
+Run the cost-aware execution experiments (no-trade band x rebalance frequency):
+
+```bash
+python stat_arb/run_phase3.py
+```
+
 If you want to rerun the notebook cells that call CoinMarketCap, export your credential first:
 
 ```bash
@@ -52,7 +58,7 @@ The pipeline first aligns token prices, volumes, and ETH reference data, then bu
 
 Primary outputs are written under `stat_arb/reporting/` and include fold-level returns, turnover series, clustering sweep summaries, leaderboards, and the final report. The intended use is comparative research across clustering methods rather than a production-ready live trading engine.
 
-Reported Sharpe ratios are accompanied by the Probabilistic Sharpe Ratio and the Deflated Sharpe Ratio (Bailey and Lopez de Prado), with the clustering sweep itself treated as the multiple-testing pool. The headline finding is deliberately negative: gross Sharpe is positive across most configurations, but no configuration survives realistic crypto taker costs plus financing carry, and the DSR of the selected configuration confirms the net result is indistinguishable from noise.
+Reported Sharpe ratios are accompanied by the Probabilistic Sharpe Ratio and the Deflated Sharpe Ratio (Bailey and Lopez de Prado), with each sweep treated as its own multiple-testing pool. The finding comes in two honest halves. Under daily rebalancing (phases 1-2), gross Sharpe is positive across all 16 configurations but nothing survives realistic taker costs, and the best net configuration's DSR (0.09) is indistinguishable from noise. The phase-3 execution experiments then show the alpha decays over multi-day horizons: trading every third day with a 2% no-trade band keeps ~97% of the gross Sharpe at about a third of the turnover, lifting net Sharpe at 50 bps from 1.0 to 2.3, break-even cost from 75 to 225 bps, with DSR 0.955 against the full 12-cell experiment grid. The survivorship-biased universe remains the binding caveat before any live claim.
 
 ### 2026-08 revision
 

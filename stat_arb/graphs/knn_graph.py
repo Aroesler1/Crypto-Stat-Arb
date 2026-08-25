@@ -36,30 +36,34 @@ class KNNGraphBuilder:
         if k is None:
             k = self.k
 
-        corr_abs = corr.abs()
         n = len(corr)
+        corr_vals = corr.to_numpy(dtype=float, copy=True)
 
-        # Initialize adjacency matrix
-        adj = pd.DataFrame(0.0, index=corr.index, columns=corr.columns)
+        # |corr| for neighbor selection; self and NaN entries never selected
+        abs_vals = np.abs(corr_vals)
+        abs_vals = np.nan_to_num(abs_vals, nan=-np.inf)
+        np.fill_diagonal(abs_vals, -np.inf)
 
-        for i, idx in enumerate(corr.index):
-            # Get correlations for this node (exclude self)
-            row = corr_abs.loc[idx].drop(idx)
+        kk = min(k, n - 1)
+        if kk <= 0:
+            return pd.DataFrame(0.0, index=corr.index, columns=corr.columns)
 
-            # Find k largest (most correlated)
-            top_k = row.nlargest(k)
+        # Top-k neighbors per row (vectorized; the previous per-cell .loc loop
+        # was O(n^2) pandas indexing and dominated fold runtime)
+        top_idx = np.argpartition(-abs_vals, kth=kk - 1, axis=1)[:, :kk]
+        adj_vals = np.zeros_like(corr_vals)
+        rows = np.repeat(np.arange(n), kk)
+        cols = top_idx.ravel()
+        adj_vals[rows, cols] = corr_vals[rows, cols]
 
-            # Add edges (use original signed correlation values)
-            for neighbor in top_k.index:
-                adj.loc[idx, neighbor] = corr.loc[idx, neighbor]
+        # Symmetrize: average of the two directed selections
+        adj_sym = (adj_vals + adj_vals.T) / 2
 
-        # Symmetrize: keep edge if either direction selected it
-        adj_sym = (adj + adj.T) / 2
+        # Zero diagonal (operate on our own array; DataFrame.values can be a
+        # read-only view under pandas copy-on-write)
+        np.fill_diagonal(adj_sym, 0)
 
-        # Zero diagonal
-        np.fill_diagonal(adj_sym.values, 0)
-
-        return adj_sym
+        return pd.DataFrame(adj_sym, index=corr.index, columns=corr.columns)
 
     def build_weighted_knn(
         self,

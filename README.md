@@ -17,7 +17,13 @@ This repository studies market-neutral crypto statistical arbitrage with signed-
 python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install numpy pandas scipy scikit-learn matplotlib statsmodels
+pip install numpy pandas scipy scikit-learn matplotlib statsmodels pytest
+```
+
+Run the test suite:
+
+```bash
+python -m pytest tests -q
 ```
 
 Run the baseline SPONGE backtest:
@@ -46,9 +52,25 @@ The pipeline first aligns token prices, volumes, and ETH reference data, then bu
 
 Primary outputs are written under `stat_arb/reporting/` and include fold-level returns, turnover series, clustering sweep summaries, leaderboards, and the final report. The intended use is comparative research across clustering methods rather than a production-ready live trading engine.
 
+Reported Sharpe ratios are accompanied by the Probabilistic Sharpe Ratio and the Deflated Sharpe Ratio (Bailey and Lopez de Prado), with the clustering sweep itself treated as the multiple-testing pool. The headline finding is deliberately negative: gross Sharpe is positive across most configurations, but no configuration survives realistic crypto taker costs plus financing carry, and the DSR of the selected configuration confirms the net result is indistinguishable from noise.
+
+### 2026-08 revision
+
+Results were regenerated after a signal-integrity pass. The material fixes, each covered by a regression test in `tests/`:
+
+- inverse-volatility position sizing is now lagged one day (it previously used same-day volatility)
+- cluster and dollar neutralization now apply only to selected names (they previously smeared small offsetting weights onto every token, inflating turnover)
+- PCA market-mode fit no longer drops every row containing a single NaN on ragged histories
+- k-NN graph construction is vectorized and compatible with pandas copy-on-write (the previous code crashed on pandas 3.x, so checked-in results could not be reproduced from a fresh environment)
+- a financing-carry stress knob (`BacktestEngine.carry_bps_daily`) approximates perp funding / borrow drag on gross exposure
+
+Headline numbers changed with these fixes (previous figures overstated gross Sharpe). See `stat_arb/reporting/FINAL_REPORT.md` for the regenerated results.
+
 ## Known limits
 
 - Results are sensitive to crypto data quality, survivorship, and execution assumptions
+- The token universe comes from a CoinMarketCap top-token snapshot, so delisted/dead tokens are absent; this survivorship bias flatters mean-reversion results and a point-in-time listing history would be needed to remove it
+- Short legs are modeled as costless to hold; in practice they are perpetual futures with per-token, time-varying funding. The `carry_bps_daily` stress knob bounds this effect but is not a funding model
 - The checked-in notebook and archived artifacts reflect exploratory work and are less polished than the package backtest path
 - Transaction costs and liquidity in crypto can change quickly enough to invalidate static assumptions
 

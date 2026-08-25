@@ -20,9 +20,16 @@ class BacktestEngine:
         self,
         cost_bps: float = 50,
         execution: str = 'close',  # 'close' or 'open'
+        carry_bps_daily: float = 0.0,
     ):
         self.cost_bps = cost_bps
         self.execution = execution
+        # Daily financing drag applied to gross exposure (bps/day).
+        # Placeholder for perp funding / borrow: crypto shorts are implemented
+        # via perpetual futures whose funding is per-token and time-varying;
+        # until per-token funding series are wired in, this uniform knob lets
+        # results be stressed for financing costs instead of assuming zero.
+        self.carry_bps_daily = carry_bps_daily
 
     def compute_returns(
         self,
@@ -94,15 +101,27 @@ class BacktestEngine:
         weights: pd.DataFrame,
         returns: pd.DataFrame,
         cost_bps: Optional[float] = None,
+        carry_bps_daily: Optional[float] = None,
     ) -> Tuple[pd.Series, pd.Series, pd.Series]:
         """
-        Compute net returns after transaction costs.
+        Compute net returns after transaction costs and financing carry.
+
+        Costs = turnover cost + carry_bps_daily on gross exposure
+        (see __init__ for the carry convention).
 
         Returns (net_returns, gross_returns, costs).
         """
+        if carry_bps_daily is None:
+            carry_bps_daily = self.carry_bps_daily
+
         gross = self.compute_gross_returns(weights, returns)
         turnover = self.compute_turnover(weights)
         costs = self.compute_costs(turnover, cost_bps)
+
+        if carry_bps_daily:
+            gross_exposure = weights.abs().sum(axis=1)
+            carry = gross_exposure * carry_bps_daily / 10000
+            costs = costs.add(carry, fill_value=0.0)
 
         # Align
         common_idx = gross.index.intersection(costs.index)

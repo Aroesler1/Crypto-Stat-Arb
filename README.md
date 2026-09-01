@@ -25,6 +25,27 @@ So `stat_arb/run_robustness.py` raises the minimum-volume floor — applied thro
 
 **Raising the floor to $1M/day collapses net Sharpe from 2.30 to 0.04.** The edge is concentrated in the illiquid tail — simultaneously where delisting risk is highest, so where the missing-token bias bites hardest, and where a flat 50bps cost is least defensible. Two independent reasons to discount the headline, pointing the same way.
 
+### The short leg mostly cannot be traded
+
+The backtest is dollar-neutral, so it needs a short in every name it sells. Checking whether those shorts exist at all, against Hyperliquid's listed perpetuals:
+
+| | count | share of universe |
+|---|---|---|
+| universe tokens | 174 | — |
+| with a listed perpetual | 22 | **12.6%** |
+| with funding history over the sample | 11 | **6.3%** |
+
+**Roughly seven in eight names have no perpetual market**, so the short side of this book is not implementable for them. That is a harder constraint than any cost assumption: it is not that shorting is expensive, it is that there is no venue.
+
+For the 11 names that can be shorted and do have history, real funding is now measured rather than approximated by the uniform `carry_bps_daily` stress knob:
+
+- cross-token mean annualised funding **+5.56%** (positive means longs pay shorts, so a short position *earns* it)
+- but the dispersion is enormous: **+49.1% (ILV) to −39.2% (BNT)**, and daily funding volatility reaches 133 bps for GAS
+
+Funding is sourced from Hyperliquid rather than Binance for a reproducibility reason worth stating: **Binance's futures endpoints return HTTP 451 to US IP addresses**, so a US-based reader cannot reproduce a Binance-sourced funding series. Hyperliquid is an on-chain venue with an open API and no such restriction.
+
+This compounds the liquidity finding above rather than sitting beside it. The alpha lives in the illiquid tail; the illiquid tail is exactly where no perpetual market exists. The names carrying the edge are the names that cannot be shorted.
+
 A second check reports the **breakeven bias**: the annualised drag that would take net Sharpe to zero. It is 34.2% at baseline and 0.6% in the liquid tier. The published 62.19% figure is a long-only upper bound rather than an estimate for a dollar-neutral book, since such a book loses both potential longs and potential shorts when a token dies — but the liquid-tier figure sitting below even the 0.93% value-weighted number is telling.
 
 Tier results are non-monotone (0.04 at $1M, 0.66 at $5M) and should be read as noisy at 57–89 names, not as a liquidity threshold effect.

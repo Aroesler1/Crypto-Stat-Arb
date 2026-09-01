@@ -193,7 +193,8 @@ def _run_single_config(excess_returns, prices, volumes, eth_data, universe_mask,
             signals=test_signals,
             cluster_labels=cluster_labels_array,
             tokens=[col.replace('_returns', '') for col in assets_list],
-            returns=context_slice.loc[test_dates],
+            # full context so lagged inverse-vol weights are populated from day 1
+            returns=context_slice,
             clusters_to_trade=valid_clusters
         )
 
@@ -274,6 +275,8 @@ def _run_single_config(excess_returns, prices, volumes, eth_data, universe_mask,
         'avg_turnover': avg_turnover,
         'breakeven_bps': breakeven,
         'n_days': n_days,
+        # kept for DSR computation in the leaderboard; dropped before CSV export
+        'net_returns': net_ret,
     }
 
 
@@ -381,7 +384,8 @@ def run_strategy2_test(H=5, L=20, cost_bps=50, verbose=True):
             signals=test_signals,
             cluster_labels=cluster_labels_array,
             tokens=[col.replace('_returns', '') for col in assets_list],
-            returns=context_slice.loc[test_dates],
+            # full context so lagged inverse-vol weights are populated from day 1
+            returns=context_slice,
             clusters_to_trade=valid_clusters
         )
 
@@ -473,8 +477,18 @@ def generate_phase2_leaderboard(clustering_results, strategy2_results=None, cost
     """
     Generate final Phase 2 leaderboard.
     """
+    from stat_arb.backtest.statistics import deflated_sharpe_ratio, per_period_sharpe
+
     results_dir = Path(__file__).parent / 'reporting' / 'phase2'
     results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Collect per-config net return series (not exported to CSV)
+    net_return_series = {}
+    if 'net_returns' in clustering_results.columns:
+        for _, row in clustering_results.iterrows():
+            if isinstance(row.get('net_returns'), pd.Series):
+                net_return_series[(row['method'], row['k'], 'Z-Score MR')] = row['net_returns']
+        clustering_results = clustering_results.drop(columns=['net_returns'])
 
     # Save clustering results
     clustering_results.to_csv(results_dir / 'clustering_sweep_results.csv', index=False)
@@ -496,9 +510,28 @@ def generate_phase2_leaderboard(clustering_results, strategy2_results=None, cost
             'breakeven_bps': strategy2_results['breakeven_bps'],
         }])
         leaderboard = pd.concat([leaderboard, s2_row], ignore_index=True)
+        if isinstance(strategy2_results.get('net_returns'), pd.Series):
+            net_return_series[('SPONGE', 3, 'Cluster Dev')] = strategy2_results['net_returns']
 
     # Sort by gross sharpe
     leaderboard = leaderboard.sort_values('gross_sharpe', ascending=False)
+
+    # Deflated Sharpe for the SELECTED (top net-Sharpe) configuration.
+    # The leaderboard itself is the multiple-testing pool: every configuration
+    # tried counts as a trial, and the cross-trial Sharpe dispersion comes
+    # from the sweep's own per-period Sharpes.
+    leaderboard['dsr_net'] = np.nan
+    if net_return_series:
+        trial_srs = [per_period_sharpe(s) for s in net_return_series.values()]
+        n_trials = len(trial_srs)
+        for idx, row in leaderboard.iterrows():
+            key = (row['method'], row['k'], row['strategy'])
+            if key in net_return_series:
+                dsr_info = deflated_sharpe_ratio(
+                    net_return_series[key], n_trials=n_trials, trial_sharpes=trial_srs
+                )
+                leaderboard.loc[idx, 'dsr_net'] = dsr_info['dsr']
+
     leaderboard.to_csv(results_dir / 'leaderboard.csv', index=False)
 
     # Print leaderboard
@@ -506,14 +539,15 @@ def generate_phase2_leaderboard(clustering_results, strategy2_results=None, cost
     print("PHASE 2 LEADERBOARD (sorted by Gross Sharpe)")
     print("="*80)
     print(f"{'Rank':<5} {'Method':<15} {'k':<4} {'Strategy':<12} {'Gross SR':<10} "
-          f"{'Net SR':<10} {'Turnover':<10} {'BE bps':<8}")
+          f"{'Net SR':<10} {'DSR':<7} {'Turnover':<10} {'BE bps':<8}")
     print("-"*80)
 
     for i, (_, row) in enumerate(leaderboard.iterrows()):
         if pd.notna(row['gross_sharpe']):
             strategy = row.get('strategy', 'Z-Score MR')
+            dsr_txt = f"{row['dsr_net']:.2f}" if pd.notna(row.get('dsr_net')) else "n/a"
             print(f"{i+1:<5} {row['method']:<15} {int(row['k']):<4} {strategy:<12} "
-                  f"{row['gross_sharpe']:<10.2f} {row['net_sharpe']:<10.2f} "
+                  f"{row['gross_sharpe']:<10.2f} {row['net_sharpe']:<10.2f} {dsr_txt:<7} "
                   f"{row['avg_turnover']*100:<10.1f}% {row['breakeven_bps']:<8.1f}")
 
     print("="*80)

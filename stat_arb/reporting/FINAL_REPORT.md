@@ -1,5 +1,72 @@
 # Stat-Arb Backtest: Final Report
 
+## 2026-08 Revision (supersedes the figures below)
+
+All results were regenerated after a signal-integrity pass. Fixes, each with a
+regression test in `tests/`:
+
+1. **Lagged inverse-vol sizing.** Position sizing previously used same-day volatility; it is now lagged one day like the signal.
+2. **No weight smearing.** Cluster/dollar neutralization previously assigned small offsetting weights to every token, including names the entry rule never selected; neutralization now applies only to traded names.
+3. **PCA fit on ragged panels.** The market-mode fit no longer drops every row containing a single NaN.
+4. **Fresh-environment reproducibility.** k-NN graph construction crashed under pandas 3.x copy-on-write, so the previous checked-in numbers could not be reproduced from a clean clone. Fixed and vectorized.
+5. **Deflated Sharpe Ratio.** The leaderboard now reports the Bailey/Lopez de Prado DSR with the sweep itself as the multiple-testing pool, plus a financing-carry stress (perp funding / borrow proxy).
+
+### Regenerated headline results (walk-forward OOS, 2024-05-30 to 2025-05-28)
+
+Phase 1 baseline (SPONGE k=3, z-score MR, H=5, L=60):
+- Gross Sharpe **1.67**, net Sharpe @ 50 bps **-2.16**, break-even cost **21.0 bps**
+- PSR 0.02, DSR 0.00, avg daily turnover 23%, max drawdown -27.7%
+
+Phase 2 sweep (16 configurations):
+- Best gross: SPONGE k=6 z-score MR, gross Sharpe **4.22**, net @ 50 bps **-1.21**, DSR 0.00
+- Best net: Cluster Deviation SPONGE k=3, gross **3.10**, net @ 50 bps **0.01**, break-even **50.3 bps**, DSR **0.09**
+
+### Honest conclusion (phases 1-2)
+
+The clustering signal carries real gross structure (positive gross Sharpe in
+all 16 configurations), but under DAILY rebalancing no configuration survives
+realistic crypto taker costs plus financing carry, and the deflated Sharpe of
+the best net configuration (0.09) says the selected result is
+indistinguishable from the best of 16 noise strategies. The prior version of
+this report overstated gross Sharpe (2.7-3.3 in the headline configs) due to
+fixes 1-2.
+
+## Phase 3: Cost-aware execution experiments (2026-08)
+
+Phases 1-2 leave the natural question: is the alpha genuinely too small, or
+is it being spent on trading costs faster than it accrues? Phase 3 sweeps two
+execution controls on the best net configuration (Cluster Deviation, SPONGE
+k=3): a no-trade band (ignore sub-band target changes) and a rebalance
+frequency (trade every k-th day, hold in between). Full grid in
+`stat_arb/reporting/phase3/execution_experiments.csv`.
+
+| band | freq | gross SR | net SR @25 | net SR @50 | turnover/day | break-even | DSR (12-trial pool) |
+|---|---|---|---|---|---|---|---|
+| 2% | 3d | 2.96 | 2.63 | **2.30** | 5.3% | **225 bps** | **0.955** |
+| 0 | 3d | 2.99 | 2.44 | 1.88 | 5.3% | 135 bps | 0.904 |
+| 0 | 1d (baseline) | 3.06 | 2.03 | 1.00 | 15.0% | 75 bps | 0.639 |
+
+Finding: the cluster mean-reversion alpha decays over multi-day horizons, so
+harvesting it every third day with a small no-trade band keeps ~97% of the
+gross Sharpe while cutting turnover 2.8x. Net Sharpe at a 50 bps taker-cost
+assumption rises from 1.00 to 2.30 and the break-even cost from 75 to 225
+bps, and the Deflated Sharpe Ratio against the full 12-cell grid is 0.955,
+i.e. the selected cell clears the expected maximum of 12 zero-skill trials.
+
+Caveats, stated plainly:
+- the universe remains survivorship-biased (CMC snapshot), which flatters
+  mean reversion; this finding needs to survive a point-in-time universe
+- one ~12-month OOS window; the DSR corrects for grid selection, not for a
+  short sample
+- phase 3 uses a cleaner execution layer than phase 2 (the daily turnover
+  cap engages from the first day, so positions ramp in); compare cells
+  within the grid, not against the phase-2 table
+- financing carry is still a separate stress (see phase 1), not embedded
+
+---
+
+## Original report (historical, pre-revision numbers)
+
 ## Executive Summary
 
 Executed low-cap crypto stat-arb using signed k-NN correlation graph, SPONGE/BNC/signed spectral clustering, and PCA market-mode removal. Daily walk-forward OOS from May 2024 to May 2025.

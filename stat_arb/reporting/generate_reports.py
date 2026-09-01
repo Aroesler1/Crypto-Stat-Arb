@@ -152,7 +152,7 @@ def generate_phase1_report(results, data_dir='data'):
 
     # 7. Monthly Returns
     ax7 = fig.add_subplot(3, 3, 7)
-    monthly_ret = net_ret.resample('M').sum() * 100
+    monthly_ret = net_ret.resample('ME').sum() * 100
     colors = ['green' if x > 0 else 'red' for x in monthly_ret.values]
     monthly_ret.plot(kind='bar', ax=ax7, color=colors, alpha=0.7)
     ax7.axhline(0, color='black', linewidth=0.5)
@@ -244,8 +244,9 @@ if __name__ == "__main__":
 
     from stat_arb.run_phase1 import run_phase1
 
-    # Run best configuration
-    results = run_phase1(H=5, L=20, cost_bps=50, verbose=True)
+    # Same configuration as the run_phase1 default, so every checked-in
+    # phase1 artifact reflects one config
+    results = run_phase1(H=5, L=60, cost_bps=50, verbose=True)
 
     if results:
         diagnostics = generate_phase1_report(results)

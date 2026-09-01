@@ -26,6 +26,7 @@ from stat_arb.signals.zscore_strategy import ZScoreStrategy
 from stat_arb.backtest.engine import BacktestEngine
 from stat_arb.backtest.walk_forward import WalkForwardBacktest, WalkForwardConfig
 from stat_arb.backtest.costs import TransactionCostModel
+from stat_arb.backtest.statistics import probabilistic_sharpe_ratio, deflated_sharpe_ratio
 
 
 def run_phase1(H=5, L=60, cost_bps=50, verbose=True):
@@ -203,7 +204,9 @@ def run_phase1(H=5, L=60, cost_bps=50, verbose=True):
             signals=test_signals,
             cluster_labels=cluster_labels_array,
             tokens=[col.replace('_returns', '') for col in assets_list],  # Strategy expects token names
-            returns=context_slice.loc[test_dates],
+            # Full context (starts L+30d before the test window) so the lagged
+            # inverse-vol weights have real estimates from the first test day
+            returns=context_slice,
             clusters_to_trade=valid_clusters
         )
 
@@ -319,6 +322,12 @@ def run_phase1(H=5, L=60, cost_bps=50, verbose=True):
     years = n_days / 365
     cagr = (np.exp(total_ret) ** (1/years) - 1) * 100 if years > 0 else 0
 
+    # Multiple-testing-aware statistics (Bailey & Lopez de Prado).
+    # n_trials = 9 reflects the 3x3 H/L grid this configuration was drawn from;
+    # if you widen the search, raise it accordingly.
+    psr = probabilistic_sharpe_ratio(net_ret)
+    dsr_info = deflated_sharpe_ratio(net_ret, n_trials=9)
+
     # 7. Save Results
     if verbose:
         print("\n[5/6] Saving results...")
@@ -354,6 +363,9 @@ def run_phase1(H=5, L=60, cost_bps=50, verbose=True):
         print(f"  Ann. Volatility: {ann_vol*100:.2f}%")
         print(f"  Max Drawdown:    {max_dd*100:.2f}%")
         print(f"  Total Return:    {total_ret*100:.2f}%")
+        print(f"STATISTICAL SIGNIFICANCE:")
+        print(f"  PSR (P[SR>0]):          {psr:.3f}")
+        print(f"  DSR (vs {dsr_info['n_trials']}-trial max):  {dsr_info['dsr']:.3f}")
         print(f"COST ANALYSIS:")
         print(f"  Total Cost Drag: {cost_drag*100:.2f}%")
         print(f"  Avg Daily Turnover: {avg_turnover*100:.2f}%")
@@ -376,6 +388,8 @@ def run_phase1(H=5, L=60, cost_bps=50, verbose=True):
         'fold_info': fold_info,
         'metrics': {
             'sharpe': sharpe,
+            'psr': psr,
+            'dsr': dsr_info['dsr'],
             'gross_sharpe': gross_sharpe,
             'cagr': cagr,
             'ann_return': ann_ret,
@@ -439,6 +453,52 @@ def run_cost_sensitivity(results, cost_grid=None, verbose=True):
         print("="*70)
 
     return sensitivity, breakeven
+
+
+def run_carry_sensitivity(results, carry_grid=None, verbose=True):
+    """
+    Stress net performance for financing carry (perp funding / borrow drag)
+    applied to gross exposure, on top of the base transaction cost.
+
+    Per-token funding series are not in the dataset, so this is a uniform
+    stress knob, not a funding model; see BacktestEngine.carry_bps_daily.
+    """
+    if carry_grid is None:
+        carry_grid = [0, 3, 6, 10]  # bps/day on gross exposure (~0-36% ann at 1x)
+
+    if results is None:
+        print("No results to analyze")
+        return None
+
+    weights = results['weights']
+    gross_ret = results['gross_returns']
+    turnover = results['turnover']
+    base_costs = results['costs']
+    gross_exposure = weights.abs().sum(axis=1)
+
+    rows = []
+    for carry in carry_grid:
+        carry_costs = gross_exposure.reindex(gross_ret.index).fillna(0.0) * carry / 10000
+        net = gross_ret - base_costs.reindex(gross_ret.index).fillna(0.0) - carry_costs
+        ann_ret = net.mean() * 365
+        ann_vol = net.std() * np.sqrt(365)
+        rows.append({
+            'carry_bps_daily': carry,
+            'sharpe': ann_ret / (ann_vol + 1e-8),
+            'ann_return': ann_ret,
+        })
+    sens = pd.DataFrame(rows)
+
+    if verbose:
+        print("\n" + "="*70)
+        print("Financing Carry Sensitivity (bps/day on gross exposure)")
+        print("="*70)
+        for _, row in sens.iterrows():
+            print(f"  carry={int(row['carry_bps_daily']):>3} bps/day: "
+                  f"Sharpe {row['sharpe']:>6.2f}, Ann Ret {row['ann_return']*100:>7.2f}%")
+        print("="*70)
+
+    return sens
 
 
 def run_parameter_sensitivity(H_grid=None, L_grid=None, cost_bps=50, verbose=True):
@@ -616,6 +676,9 @@ if __name__ == "__main__":
     if results is not None:
         # Cost sensitivity
         cost_sens, breakeven = run_cost_sensitivity(results, verbose=True)
+
+        # Financing carry stress
+        run_carry_sensitivity(results, verbose=True)
 
         # Generate report
         generate_phase1_report(results)

@@ -1,16 +1,21 @@
 # Crypto Stat-Arb
 
-This repository studies market-neutral crypto statistical arbitrage with signed-graph clustering and walk-forward backtesting. It builds a residualized correlation graph after removing the market mode, clusters the graph with signed methods such as SPONGE and BNC, and trades cluster-level mean-reversion signals under explicit turnover and transaction-cost controls.
+Market-neutral cryptocurrency statistical arbitrage: signed-graph clustering over a market-mode-residualized correlation graph, with walk-forward backtesting, explicit transaction-cost modelling, and multiple-testing-aware validation.
 
-**This is a methodology study, not a return claim.** Read the next section before any performance number in this repository.
+## What it does
 
-## The headline finding is negative
+- **Removes the market mode by PCA**, then builds a signed k-nearest-neighbour correlation graph on the residuals, so clusters reflect relative rather than common movement
+- **Clusters with SPONGE, BNC and signed spectral methods**, compared like-for-like across a 16-configuration sweep rather than picking one and defending it
+- **Trades cluster mean reversion** under a daily turnover cap, a no-trade band, and a rebalance-frequency control
+- **Validates with Probabilistic and Deflated Sharpe Ratios**, treating each sweep as its own multiple-testing pool, plus a financing-carry stress for perpetual funding
 
-The best configuration reaches a net Sharpe of 2.30 after 50bps of taker cost. That number does not survive scrutiny, and the interesting result is why.
+## Headline result: the alpha is an illiquidity effect
 
-The token universe comes from a CoinMarketCap snapshot, so tokens that died are absent. Ammann, Burdorf, Liebi and Stöckl ([SSRN 4287573](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4287573), 3,904 coins, 2014–2021) measure the resulting survivorship bias at **0.93% annualised value-weighted and 62.19% equal-weighted**, and find that momentum and market beta lose any positive relation to returns once delisting returns are included. This book is near-equal-weighted, which is the regime where that bias is largest.
+The best configuration reaches a net Sharpe of **2.30** after 50bps of taker cost. Rather than report that number, this repository locates where the edge actually lives — and the answer changes the conclusion.
 
-Rather than assert the result is unaffected, `stat_arb/run_robustness.py` tests where the edge actually lives. The minimum-volume floor is applied through `UniverseManager`, which filters point-in-time at each reconstitution, so this introduces no forward-looking information:
+The universe is a CoinMarketCap snapshot, so tokens that died are absent. Ammann, Burdorf, Liebi and Stöckl ([SSRN 4287573](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4287573), 3,904 coins, 2014–2021) measure the resulting survivorship bias at 0.93% annualised value-weighted and **62.19% equal-weighted**, and find momentum and market beta lose any positive relation to returns once delisting returns are included. This book is near-equal-weighted, the regime where that bias is largest.
+
+So `stat_arb/run_robustness.py` raises the minimum-volume floor — applied through `UniverseManager`, which filters point-in-time at each reconstitution, so no forward-looking information enters:
 
 | universe | avg members | gross Sharpe | net Sharpe @50bps | breakeven cost |
 |---|---|---|---|---|
@@ -18,15 +23,13 @@ Rather than assert the result is unaffected, `stat_arb/run_robustness.py` tests 
 | ≥ $1M/day | 89 | 0.74 | **0.04** | 53 bps |
 | ≥ $5M/day | 57 | 1.21 | **0.66** | 110 bps |
 
-**The edge is concentrated in the illiquid tail.** Raising the liquidity floor to $1M/day collapses net Sharpe from 2.30 to 0.04. That tail is simultaneously where delisting risk is highest, so where the missing-token bias bites hardest, and where a flat 50bps cost assumption is least defensible. Two independent reasons to discount the headline, pointing the same way.
+**Raising the floor to $1M/day collapses net Sharpe from 2.30 to 0.04.** The edge is concentrated in the illiquid tail — simultaneously where delisting risk is highest, so where the missing-token bias bites hardest, and where a flat 50bps cost is least defensible. Two independent reasons to discount the headline, pointing the same way.
 
-The tier results are not monotone (0.04 at $1M, 0.66 at $5M) and should be read as noisy at 57–89 names, not as evidence that liquidity helps above some threshold.
+A second check reports the **breakeven bias**: the annualised drag that would take net Sharpe to zero. It is 34.2% at baseline and 0.6% in the liquid tier. The published 62.19% figure is a long-only upper bound rather than an estimate for a dollar-neutral book, since such a book loses both potential longs and potential shorts when a token dies — but the liquid-tier figure sitting below even the 0.93% value-weighted number is telling.
 
-A second check is reported alongside: the **breakeven bias**, the annualised return drag that would take net Sharpe to zero. It is 34.2% at baseline and 0.6% in the liquid tier. The published 62.19% figure is a long-only upper bound rather than an estimate for this book, since a dollar-neutral portfolio loses both potential longs and potential shorts when a token dies, but the liquid-tier figure sitting below even the 0.93% value-weighted number is telling.
+Tier results are non-monotone (0.04 at $1M, 0.66 at $5M) and should be read as noisy at 57–89 names, not as a liquidity threshold effect.
 
-### What would settle it
-
-Point-in-time listing history including dead tokens. That is a paid dataset and has not been purchased, so the honest status is: **the clustering and execution methodology is the contribution here; the Sharpe is not.**
+Settling this properly needs point-in-time listing history including dead tokens, which is a paid dataset and has not been purchased. The honest status: **the clustering and execution methodology is the contribution; the Sharpe is not.**
 
 ## What the repository does establish
 

@@ -25,12 +25,25 @@ class UniverseManager:
         min_volume_usd: float = 100_000,     # Minimum daily volume
         min_history_days: int = 90,          # Minimum days of history required
         reconstitution_freq: str = 'M',      # Monthly reconstitution
+        volume_in_usd: bool = False,         # See note below
     ):
         self.mcap_percentile_low = mcap_percentile_low
         self.mcap_percentile_high = mcap_percentile_high
         self.min_volume_usd = min_volume_usd
         self.min_history_days = min_history_days
         self.reconstitution_freq = reconstitution_freq
+        # The volume column of data/all_tokens_24mo_daily.csv is ALREADY in USD
+        # (SNX $29M/day, ETH $8.7B/day on 2024-06-01), but the liquidity filter
+        # below has always computed `volumes * prices`, i.e. USD x price. Every
+        # published tier floor in this repository is therefore a floor on that
+        # product rather than on notional traded, and the labels "$50k/day" and
+        # "$1M/day" do not mean what they say.
+        #
+        # The default is left at the legacy behaviour so that no previously
+        # published number silently moves. Pass volume_in_usd=True to filter on
+        # notional traded, which is what the labels claim. The point-in-time
+        # robustness run reports both conventions side by side.
+        self.volume_in_usd = volume_in_usd
 
     def compute_daily_mcap_rank(
         self,
@@ -101,8 +114,9 @@ class UniverseManager:
         # Market cap band filter
         in_band = (mcap_rank >= self.mcap_percentile_low) & (mcap_rank <= self.mcap_percentile_high)
 
-        # Volume filter (rolling average volume)
-        avg_volume = (volumes * prices).rolling(window=20, min_periods=5).mean()
+        # Volume filter (rolling average notional); see volume_in_usd in __init__
+        notional = volumes if self.volume_in_usd else volumes * prices
+        avg_volume = notional.rolling(window=20, min_periods=5).mean()
         has_volume = avg_volume >= self.min_volume_usd
 
         # History filter

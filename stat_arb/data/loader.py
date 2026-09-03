@@ -141,11 +141,18 @@ class DataLoader:
         # Find common dates
         common_dates = excess_returns.index.intersection(prices.index).intersection(volumes.index).intersection(eth_data.index)
 
-        # Find common tokens (normalize column names)
+        # Find common tokens (normalize column names).
+        # sorted() is load-bearing, not tidiness: iterating the raw set puts the
+        # columns in Python's per-process string hash order, so the panel came
+        # out in a different column order on every run. That reorders the k-NN
+        # graph and the k-means embedding, which flips cluster labels and the
+        # noisy-cluster pick, and moved baseline gross Sharpe over roughly
+        # 2.96-3.23 across identical runs. The checked-in results could not be
+        # reproduced from a fresh process until this was pinned.
         excess_tokens = set(c.replace('_returns', '') for c in excess_returns.columns)
         price_tokens = set(prices.columns)
         vol_tokens = set(volumes.columns)
-        common_tokens = excess_tokens.intersection(price_tokens).intersection(vol_tokens)
+        common_tokens = sorted(excess_tokens & price_tokens & vol_tokens)
 
         # Align everything
         excess_returns = excess_returns.loc[common_dates, [f"{t}_returns" for t in common_tokens if f"{t}_returns" in excess_returns.columns]]

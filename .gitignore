@@ -27,3 +27,7 @@ __pycache__/
 
 # Raw CMC pull cache (derived tables are committed instead)
 data/raw_cmc/
+
+# Cross-agent working notes. Kept locally, not published: it is scratch context
+# for whoever picks the work up next, not part of the repo.
+handoff.md

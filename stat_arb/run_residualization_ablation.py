@@ -49,6 +49,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from stat_arb.data import brackets as B  # noqa: E402
 from stat_arb.data import daily_listings as D  # noqa: E402
 from stat_arb.data.universe import UniverseManager  # noqa: E402
+from stat_arb.backtest.statistics import probabilistic_sharpe_ratio  # noqa: E402
 from stat_arb.run_phase3 import annualized_sharpe, run_phase3_config  # noqa: E402
 
 BTC_CMC_ID = 1
@@ -118,8 +119,16 @@ def load_inputs(panel_path: Path, data_dir: Path, start: pd.Timestamp,
     return table, assignments, close, volume, mcap, refs, index
 
 
-def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index):
-    """One ablation arm on one bracket. Returns stats plus the diagnostics."""
+def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index,
+            clusterer=None):
+    """One ablation arm on one bracket. Returns stats plus the diagnostics.
+
+    `clusterer` defaults to the published SPONGE k=3 path. The clustering-method
+    sweep passes its own, which is why this takes one rather than hard-coding
+    the method: the residualization ablation and the method comparison then run
+    through exactly the same universe construction, liquidity filter and
+    backtest, and differ only in the thing each is varying.
+    """
     returns, _ = D.excess_log_returns(close, refs[reference], table)
     cols = [c for c in member_mask.columns if c in returns.columns]
     if not cols:
@@ -147,7 +156,8 @@ def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index):
     diagnostics: list[dict] = []
     result = run_phase3_config(returns, mask, weight_band=BEST_BAND,
                                trade_frequency_days=BEST_FREQ,
-                               n_pca_components=n_pca, diagnostics=diagnostics)
+                               n_pca_components=n_pca, diagnostics=diagnostics,
+                               clusterer=clusterer)
     if result is None:
         return None
 
@@ -164,6 +174,15 @@ def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index):
         "breakeven_bps": result["breakeven"],
         "turnover": float(result["turnover"].mean()),
         "n_rebalances": len(diagnostics),
+        # PSR on the net series: the probability the true Sharpe clears zero,
+        # given this sample's length, skew and kurtosis. Reported on net rather
+        # than gross because a gross PSR flatters a book nobody can trade.
+        "psr": float(probabilistic_sharpe_ratio(result["net_50"])),
+        # Kept so the tradability step can charge funding against the positions
+        # actually held. Callers that only want the summary pop these.
+        "net_series": result["net_50"],
+        "net_series_for_funding": result["net_50"],
+        "weights": result["weights"],
     }
 
 
@@ -210,6 +229,8 @@ def main(argv: list[str] | None = None) -> int:
             if stats is None:
                 print("    produced no positions, skipped")
                 continue
+            for _k in ("net_series", "net_series_for_funding", "weights"):
+                stats.pop(_k, None)
             stats.update(bracket=bracket, arm=label, reference=reference,
                          n_pca=n_pca, treatment=args.treatment)
             rows.append(stats)

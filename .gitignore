@@ -31,3 +31,9 @@ data/raw_cmc/
 # Cross-agent working notes. Kept locally, not published: it is scratch context
 # for whoever picks the work up next, not part of the repo.
 handoff.md
+
+# The daily point-in-time listing panel: ~3,600 daily rankings x 2,000 ranks.
+# Too large to commit and reproducible from `stat_arb/build_daily_listings.py`.
+# The derived tables it feeds (bracket_*.parquet, pit_monthly_ranks.parquet)
+# are committed instead.
+data/pit_daily_listings.parquet

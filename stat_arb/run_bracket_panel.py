@@ -336,7 +336,12 @@ def main(argv: list[str] | None = None) -> int:
             continue
         r = returns[cols]
         r.columns = [str(c) for c in r.columns]
-        r.to_parquet(out_dir / f"bracket_returns_{bracket}.parquet", compression="zstd")
+        # float32 halves the committed panel. Daily log returns live around
+        # 1e-3 to 1e0 and float32 carries ~7 significant digits, so the error
+        # accumulated over the whole 3,500-day sample is order 1e-5, far below
+        # anything that moves a Sharpe ratio.
+        r.astype("float32").to_parquet(
+            out_dir / f"bracket_returns_{bracket}.parquet", compression="zstd")
         stacked = pd.concat(
             {k: membership[bracket][k][cols] for k in SURVIVORSHIP_TREATMENTS}, axis=1)
         stacked.columns = [f"{a}|{int(b)}" for a, b in stacked.columns]

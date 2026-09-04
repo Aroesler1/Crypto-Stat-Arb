@@ -269,3 +269,53 @@ class KSelector:
         """
         from sklearn.metrics import adjusted_mutual_info_score
         return adjusted_mutual_info_score(labels_current, labels_previous)
+
+
+def signflip_parallel_analysis(
+    adjacency,
+    n_replicates: int = 50,
+    max_k: int = 12,
+    random_state: int = 42,
+) -> tuple:
+    """Estimate the number of clusters by signflip parallel analysis.
+
+    Hong and Cape, "Signflip parallel analysis" (arXiv:2509.05722). The idea is
+    the same as Horn's parallel analysis for factor models, adapted to a matrix
+    whose entries carry signs: build a null by randomly flipping the sign of
+    every entry, which destroys any block structure while preserving the
+    magnitude distribution and the sparsity pattern exactly, then keep only the
+    eigenvalues of the real matrix that stand above what that null produces.
+
+    This is worth having because every other criterion in this module scores a
+    partition that has already been produced, so all of them will happily rank
+    three clusters against four in a graph that has no clusters at all. Parallel
+    analysis can return zero, which is the honest answer for a correlation graph
+    with no block structure left in it after residualization.
+
+    Returns ``(k, threshold, eigenvalues)``. ``k`` is clipped to ``max_k`` and
+    reported as at least 2, because the caller has to cluster something, but the
+    raw count above the threshold is recoverable from the returned eigenvalues.
+    """
+    a = adjacency.to_numpy() if isinstance(adjacency, pd.DataFrame) else np.asarray(adjacency)
+    a = np.nan_to_num(np.array(a, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
+    a = (a + a.T) / 2.0
+    np.fill_diagonal(a, 0.0)
+    n = len(a)
+    if n < 3:
+        return 2, np.nan, np.array([])
+
+    observed = np.sort(np.abs(np.linalg.eigvalsh(a)))[::-1]
+
+    rng = np.random.default_rng(random_state)
+    null_max = np.empty(n_replicates)
+    iu = np.triu_indices(n, k=1)
+    for b in range(n_replicates):
+        signs = rng.choice((-1.0, 1.0), size=len(iu[0]))
+        flipped = np.zeros_like(a)
+        flipped[iu] = a[iu] * signs
+        flipped = flipped + flipped.T
+        null_max[b] = np.abs(np.linalg.eigvalsh(flipped)).max()
+
+    threshold = float(np.max(null_max))
+    k_raw = int((observed > threshold).sum())
+    return int(np.clip(k_raw, 2, max_k)), threshold, observed

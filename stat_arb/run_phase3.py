@@ -98,10 +98,17 @@ def default_clusterer(adj, n_clusters):
     return sponge.labels_
 
 
+def default_strategy(H, L):
+    """The published signal: cluster deviation with an equal-weighted composite."""
+    return ClusterDeviationStrategy(lookback=H, zscore_window=L,
+                                    entry_threshold=1.5, composite_type='equal')
+
+
 def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
                       weight_band=0.0, trade_frequency_days=1,
                       n_pca_components=1, clusterer=None, n_clusters=3,
-                      diagnostics=None):
+                      diagnostics=None, strategy_factory=None,
+                      cluster_selector=None, weight_filter=None):
     """One walk-forward run of Cluster Deviation with the given controls.
 
     Defaults reproduce phase 2 strategy 2 exactly (one PCA component removed,
@@ -121,9 +128,23 @@ def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
                           the variance removed, the signed-graph density and the
                           cluster labels, which is what the ablation reports and
                           what cluster stability (ARI) is computed from.
+    ``strategy_factory``  callable (H, L) -> a strategy exposing
+                          `compute_signals` and `generate_target_weights`. Lets
+                          the signal ablation swap in the OU s-score or the
+                          beta-adjusted deviation without touching the universe,
+                          the clustering or the execution controls.
+    ``cluster_selector``  callable (returns, labels, tokens, as_of) -> list of
+                          clusters to trade, for the cluster-momentum overlay.
+                          Defaults to dropping the least cohesive cluster, which
+                          is what the published configuration does.
+    ``weight_filter``     callable (weights, tokens, dates) -> weights, applied
+                          after construction. The death filter gates the long
+                          leg here.
     """
     if clusterer is None:
         clusterer = default_clusterer
+    if strategy_factory is None:
+        strategy_factory = default_strategy
     return_cols_to_tokens = {col: col.replace('_returns', '') for col in excess_returns.columns}
     prev_weights = [None]
 
@@ -205,8 +226,13 @@ def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
             })
 
         cluster_labels_array = np.array([labels[assets_list.index(col)] for col in assets_list])
-        strategy = ClusterDeviationStrategy(
-            lookback=H, zscore_window=L, entry_threshold=1.5, composite_type='equal')
+        strategy = strategy_factory(H, L)
+
+        if cluster_selector is not None:
+            picked = cluster_selector(context_residuals, cluster_labels_array,
+                                      [c.replace('_returns', '') for c in assets_list],
+                                      test_dates[0])
+            valid_clusters = [c for c in picked if c in set(valid_clusters)] or valid_clusters
 
         test_signals = strategy.compute_signals(
             context_residuals, cluster_labels_array,
@@ -222,6 +248,9 @@ def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
             clusters_to_trade=valid_clusters,
         )
         weights = weights.reindex(columns=full_returns.columns, fill_value=0.0)
+
+        if weight_filter is not None:
+            weights = weight_filter(weights, assets_list, test_dates)
 
         target_leverage = 1.5
         gross = weights.abs().sum(axis=1)

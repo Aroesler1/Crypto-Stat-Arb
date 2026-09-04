@@ -62,6 +62,22 @@ MAX_LISTING_ROWS = 1000
 # survivorship for our purposes.
 DEAD_STATUSES = ("inactive", "untracked")
 
+# Polite pause between requests, in seconds. The endpoints are unauthenticated
+# and rate-limited by courtesy rather than by quota, so a long pull sets this
+# higher (see `set_pause`) rather than hammering and getting throttled.
+_PAUSE = 0.25
+
+
+def set_pause(seconds: float) -> None:
+    """Set the inter-request pause used by every fetch in this module."""
+    global _PAUSE
+    _PAUSE = float(seconds)
+
+
+def get_pause() -> float:
+    return _PAUSE
+
+
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
@@ -70,7 +86,7 @@ _HEADERS = {"User-Agent": _UA, "Accept": "application/json"}
 
 
 def _get(path: str, params: dict, timeout: int = 45, retries: int = 4,
-         pause: float = 0.25) -> dict:
+         pause: float | None = None) -> dict:
     """GET a CMC web-API path with bounded exponential backoff.
 
     The endpoint is unauthenticated and politeness-limited rather than quota
@@ -79,6 +95,7 @@ def _get(path: str, params: dict, timeout: int = 45, retries: int = 4,
     silently returning an empty frame.
     """
     url = f"{BASE}{path}?{urllib.parse.urlencode(params)}"
+    pause = _PAUSE if pause is None else float(pause)
     last: Exception | None = None
     for attempt in range(retries):
         try:

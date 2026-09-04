@@ -161,3 +161,61 @@ class DataLoader:
         eth_data = eth_data.loc[common_dates]
 
         return excess_returns, prices, volumes, eth_data
+
+
+# --- Broader exclusion filter for the ETH-relative bracket panel -------------
+#
+# `EXCLUDED_TOKENS` above is a hand-kept ticker list. It was written for the
+# committed 319-token snapshot and is left untouched so every published rank
+# 150-500 number reproduces exactly. A point-in-time panel spanning 2016-2025
+# and ranks 1-2000 sees far more of the derivative tail: liquid-staking
+# receipts, bridged and pegged wrappers, and the long list of stablecoins that
+# came and went. Matching on the ticker alone misses those, because CMC reuses
+# tickers and most of these names are only identifiable from the coin's name.
+#
+# A wrapper, a staking receipt or a bridged claim is not an independent asset:
+# it is a redundant quote on something already in the panel, and a
+# mean-reversion book that holds both sides of `ETH` / `stETH` is trading the
+# peg, not the cross-section. Stablecoins have no cross-sectional dispersion to
+# cluster on at all.
+
+# Name fragments that identify a derivative claim rather than an asset.
+DERIVATIVE_NAME_PATTERNS = (
+    "wrapped", "staked", "restaked", "bridged", "peg", "-peg", "wormhole",
+    "liquid staking", "lst ", "receipt", "synthetic", "tokenized",
+)
+
+# Name fragments that identify a stablecoin. Kept separate from the ticker list
+# because most stablecoins say so in their name and new ones keep appearing.
+STABLE_NAME_PATTERNS = (
+    "usd", "stable", "dollar", "euro", "eur ", "tether", "gbp", "yen", "jpy",
+    "peso", "real ", "franc", "dirham", "rupee", "lira",
+)
+
+# Names that contain a stable/derivative fragment but are ordinary assets.
+# Without this, "usd" alone would eat every project whose name happens to carry
+# those letters. Checked before the pattern lists.
+NAME_PATTERN_EXCEPTIONS = (
+    "usdt.z", "pundi x", "usual",
+)
+
+
+def is_derivative_or_stable(symbol: str | None, name: str | None) -> bool:
+    """True if a token is a stablecoin, wrapper, staking receipt or bridge claim.
+
+    Two-stage: the curated ticker list first (exact, and what the published
+    numbers used), then case-insensitive name fragments for everything the list
+    cannot know about. Deliberately errs toward exclusion; a real asset wrongly
+    dropped costs the panel one name, whereas a wrapper left in creates a
+    spurious near-arbitrage pair that a reversion book will happily "trade".
+    """
+    sym = (symbol or "").strip().upper()
+    if sym and sym in EXCLUDED_TOKENS:
+        return True
+
+    nm = (name or "").strip().lower()
+    if not nm:
+        return False
+    if any(exc in nm for exc in NAME_PATTERN_EXCEPTIONS):
+        return False
+    return any(p in nm for p in DERIVATIVE_NAME_PATTERNS + STABLE_NAME_PATTERNS)

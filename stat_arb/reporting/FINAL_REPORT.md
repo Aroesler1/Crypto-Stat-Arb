@@ -152,13 +152,37 @@ Executed low-cap crypto stat-arb using signed k-NN correlation graph, SPONGE/BNC
 
 ### Clustering Method Comparison
 
+**Corrected 2026-09-04.** The BNC implementation this table was produced with
+was solving `eigh(A+ - A-, D_tot)` for its smallest eigenvalues. Balance
+Normalized Cut (Chiang, Whang and Dhillon, CIKM 2012) is
+`eigh(D+ - A+ + A-, D+ + D-)`. Omitting the `D+` term shifts the spectrum, so
+the old code selected from the opposite end of it: on planted signed blocks
+that SPONGE recovers exactly (adjusted Rand index 1.000), it scored -0.02,
+which is worse than assigning labels at random. Every BNC row below is
+therefore a re-run, and the previously published leader (BNC k=5, gross 4.46,
+net -0.18, break-even 48.3 bps) does not survive.
+
+The same audit found `SPONGEClustering.fit_symmetric` was a similarity
+transform of the pencil `fit` already solves, returning identical labels and
+eigenvalues, so a "SPONGEsym" column would have been plain SPONGE run twice. It
+now implements the symmetrically normalized form of Cucuringu et al.
+(AISTATS 2019).
+
 | Rank | Method | k | Gross SR | Net SR @50bps | Break-even |
 |------|--------|---|----------|---------------|------------|
-| 1 | BNC | 5 | 4.46 | -0.18 | 48.3 bps |
-| 2 | SPONGE | 6 | 4.07 | -1.35 | 37.6 bps |
-| 3 | SignedSpectral | 6 | 3.96 | -1.15 | 38.6 bps |
-| 4 | BNC | 4 | 3.70 | -0.83 | 40.5 bps |
-| 5 | SignedSpectral | 5 | 3.60 | -1.91 | 32.7 bps |
+| 1 | BNC | 6 | 4.21 | -1.34 | 37.6 bps |
+| 2 | SPONGE | 6 | 3.71 | -1.88 | 32.7 bps |
+| 3 | BNC | 5 | 3.49 | -1.72 | 33.7 bps |
+| 4 | BNC | 3 | 3.38 | -1.68 | 32.7 bps |
+| 5 | SignedSpectral | 6 | 3.29 | -2.40 | 28.8 bps |
+| 6 | SPONGE | 3 (Cluster Dev) | 3.25 | **+0.15** | **52.2 bps** |
+
+The conclusion the sweep is used for does not change, and is if anything
+sharper: of all sixteen configurations, exactly one has a positive net Sharpe
+after 50 bps, and it is the same one as before, SPONGE k=3 with the Cluster
+Deviation signal. Every other configuration in the sweep, the highest-gross one
+included, loses money at realistic costs. High gross Sharpe in this book is a
+turnover artifact, not an edge.
 
 ### Strategy 2: Cluster Deviation
 
@@ -179,7 +203,8 @@ Executed low-cap crypto stat-arb using signed k-NN correlation graph, SPONGE/BNC
 ## Key Findings
 
 1. **All clustering methods produce positive gross alpha** (Sharpe 2-4+)
-2. **BNC k=5 has highest gross Sharpe (4.46)** but lower break-even
+2. **BNC k=6 has the highest gross Sharpe (4.21)** but a net Sharpe of -1.34.
+   Only one configuration in the sweep is net positive at 50 bps
 3. **Strategy 2 (Cluster Deviation) is most robust to costs** with 54.2 bps break-even
 4. **At realistic execution costs (25-30 bps), Strategy 2 achieves Sharpe 1.45-1.76**
 5. **Strategy is fully market-neutral** (ETH beta ~0.02, PC1 beta ~0.00)

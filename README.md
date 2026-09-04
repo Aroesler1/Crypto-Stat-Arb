@@ -60,14 +60,97 @@ Measured on the point-in-time universe with the signal held fixed
 | bracket | best net Sharpe | best reference | breakeven | shortable share (2025) | verdict |
 |---|---|---|---|---|---|
 | B0 mega | not yet measured | BTC / value-weighted | - | 100% | shortable, too few names to cluster |
-| B1 large | measured on `clustering-methods` | - | - | 87% | shortable, clusterable in only 20 of 114 months |
-| B2 mid | measured on `clustering-methods` | - | - | 76% | clusterable and mostly shortable |
-| B3 small | measured on `clustering-methods` | - | - | 48% | the original band: always clusterable, rarely shortable |
+| B1 large | **+0.40** | ETH-excess, no PCA | 98 bps | 87% | the only bracket that is net positive and shortable, but clusterable in 20 of 114 months |
+| B2 mid | -0.24 | value-weighted | 0 bps | 76% | clusterable and mostly shortable, no edge |
+| B3 small | -0.42 | ETH-excess, no PCA | 0 bps | 48% | the original band: always clusterable, never shortable, no edge |
 
-The structural squeeze is already visible before any strategy is run.
-Dispersion worth clustering lives where the names cannot be shorted, and the
-names that can be shorted are too few to cluster. The per-bracket net Sharpe
-that completes this table is measured on the `clustering-methods` branch.
+The expected shape holds, and it is a squeeze. Dispersion worth clustering lives
+where the names cannot be shorted; the names that can be shorted are too few to
+cluster. B1 is the one bracket where a positive net Sharpe and a tradable short
+leg coexist, and it is thin for four fifths of the sample.
+
+**The clustering and execution methodology is the contribution. The Sharpe is
+survivorship, and the one bracket that survives is too thin to hold it.**
+
+## What "the market" is differs by bracket, and PCA is not it
+
+The original report residualized against ETH. The rebuild residualized against a
+PCA market mode. Neither was ever tested against the other, so both are run as
+an explicit ablation with the signal held fixed. Point-in-time universe, all
+three clustered brackets:
+
+| bracket | arm | var removed | graph density | negative edges | cluster stability | gross | net @50bps |
+|---|---|---|---|---|---|---|---|
+| B1 | **ETH-excess** | 0% | 65.4% | 1% | **0.545** | 0.81 | **+0.40** |
+| B1 | BTC-excess | 0% | 68.2% | 3% | 0.527 | -0.34 | -0.86 |
+| B1 | value-weighted | 0% | 66.8% | 5% | 0.511 | -0.23 | -0.74 |
+| B1 | ETH + PCA1 | 28.3% | 59.6% | 79% | 0.405 | -0.07 | -0.49 |
+| B1 | ETH + PCA2 | 37.3% | 57.9% | 77% | 0.280 | 0.21 | -0.27 |
+| B1 | ETH + PCA3 | 43.9% | 57.4% | 75% | 0.217 | -0.34 | -0.84 |
+| B2 | ETH-excess | 0% | 24.2% | 1% | 0.522 | -0.51 | -0.75 |
+| B2 | **value-weighted** | 0% | 23.9% | 4% | 0.476 | -0.03 | **-0.24** |
+| B2 | ETH + PCA1 | 23.1% | 20.8% | 58% | 0.410 | -0.41 | -0.59 |
+| B2 | ETH + PCA3 | 31.5% | 19.7% | 61% | 0.175 | -0.19 | -0.40 |
+| B3 | **ETH-excess** | 0% | 9.5% | 1% | **0.637** | -0.28 | **-0.42** |
+| B3 | BTC-excess | 0% | 9.3% | 2% | 0.598 | -0.87 | -1.00 |
+| B3 | ETH + PCA1 | 17.2% | 7.9% | 43% | 0.503 | -0.57 | -0.70 |
+| B3 | ETH + PCA3 | 23.7% | 7.1% | 48% | 0.141 | -0.46 | -0.59 |
+
+Cluster stability is the adjusted Rand index between consecutive monthly
+clusterings, on the tokens common to both. Density is only comparable within a
+bracket, because a k=10 neighbour graph over 21 nodes is necessarily denser than
+one over 261. Full table: `stat_arb/reporting/brackets/`.
+
+Three things come out of it.
+
+**PCA creates the signed structure and then destroys the partition.** With no
+PCA step only 1% to 5% of edges are negative: everything co-moves with the
+market, so there is barely a signed graph to cluster. Removing one principal
+component takes the negative-edge share to 43-79%. But cluster stability falls
+monotonically with every component removed, in every bracket: B1 0.545 to 0.217,
+B2 0.522 to 0.175, B3 0.637 to 0.141. By three components the partition is
+reshuffling almost completely every month, and a cluster assignment that does
+not survive to the next reconstitution cannot be traded.
+
+**More variance removed never bought a better net Sharpe.** In all three
+brackets the best arm removes zero principal components. The rebuild's choice to
+residualize against a PCA market mode is worse on this panel than the original
+report's plain ETH-excess.
+
+**The best reference does differ by bracket**, which is the question the
+ablation was run to answer: ETH-excess for B1 and B3, the value-weighted market
+for B2. The B2 and B3 differences are between negative numbers, so they rank
+least-bad rather than best.
+
+## Survivorship is a small-cap phenomenon, and it scales down the spectrum
+
+Running the same ablation on the survivor-only universe (the same bracket, the
+same signal, minus the tokens that are dead today) turns the headline finding
+into a gradient. Best net Sharpe at 50 bps in each bracket, under each
+treatment:
+
+| bracket | point-in-time | survivor-only | survivorship worth | deaths in bracket |
+|---|---|---|---|---|
+| B1 large | **+0.40** (ETH) | -0.07 (value-weighted) | -0.47 | 9 over 10 years |
+| B2 mid | -0.24 (value-weighted) | +0.35 (BTC) | **+0.59** | 60 |
+| B3 small | -0.42 (ETH) | **+0.55** (ETH+PCA3) | **+0.97** | 291 |
+
+The further down the cap spectrum, the more of the apparent edge is dead
+tokens. B3, the report's original band, goes from a tradable-looking +0.55 with
+a 205 bps breakeven on survivor data to -0.42 once the tokens that died are
+allowed back in. B2 shows the same sign flip at roughly two thirds the
+magnitude. B1 does not show it at all, and in fact runs slightly better
+point-in-time, which is what you would expect from a bracket that buried nine
+tokens in ten years: there is almost no survivorship there to remove, and the
+difference is noise.
+
+**The PCA residualization's apparent benefit is itself a survivorship
+artifact.** On survivor-only B3 the two best arms in the whole table are
+ETH+PCA3 (+0.55) and ETH+PCA1 (+0.51), comfortably ahead of plain ETH-excess
+(-0.20). On the same bracket point-in-time, every PCA arm is worse than plain
+ETH-excess. Removing principal components makes the book look better only on a
+universe that has had its losers deleted, which is the single most important
+reason not to select a residualization on survivor data.
 
 ## Headline result: the alpha was survivorship
 

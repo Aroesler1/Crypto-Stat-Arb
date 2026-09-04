@@ -91,10 +91,39 @@ def make_execution_portfolio_func(prev_weights_holder, weight_band=0.0,
     return portfolio_func
 
 
+def default_clusterer(adj, n_clusters):
+    """The published clusterer: SPONGE on the signed k-NN graph."""
+    sponge = SPONGEClustering(n_clusters=n_clusters, random_state=42)
+    sponge.fit(adj)
+    return sponge.labels_
+
+
 def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
-                      weight_band=0.0, trade_frequency_days=1):
-    """One walk-forward run of Cluster Deviation SPONGE k=3 with the given
-    execution controls. Signal path identical to phase 2 strategy 2."""
+                      weight_band=0.0, trade_frequency_days=1,
+                      n_pca_components=1, clusterer=None, n_clusters=3,
+                      diagnostics=None):
+    """One walk-forward run of Cluster Deviation with the given controls.
+
+    Defaults reproduce phase 2 strategy 2 exactly (one PCA component removed,
+    SPONGE k=3), so every published number still comes out of this function.
+    The parameters exist so later steps can vary one thing at a time against
+    the same signal path rather than forking it:
+
+    ``n_pca_components``  how many principal components to remove on top of
+                          whatever excess is already in `excess_returns`. 0
+                          removes none, which is what the ETH-excess-only and
+                          BTC-excess-only arms of the residualization ablation
+                          need.
+    ``clusterer``         callable (adjacency, n_clusters) -> labels. Lets the
+                          clustering-method comparison swap in SSSNET, Pivot,
+                          hierarchical or k-means without touching the signal.
+    ``diagnostics``       optional list; one dict is appended per rebalance with
+                          the variance removed, the signed-graph density and the
+                          cluster labels, which is what the ablation reports and
+                          what cluster stability (ARI) is computed from.
+    """
+    if clusterer is None:
+        clusterer = default_clusterer
     return_cols_to_tokens = {col: col.replace('_returns', '') for col in excess_returns.columns}
     prev_weights = [None]
 
@@ -118,20 +147,27 @@ def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
         if train_subset.shape[1] < 10:
             return pd.DataFrame(0, index=test_dates, columns=full_returns.columns)
 
-        pca = MarketModeExtractor(n_components=1)
-        pca.fit(train_subset)
-        train_residuals = pca.residualize(train_subset)
+        if n_pca_components > 0:
+            pca = MarketModeExtractor(n_components=n_pca_components)
+            pca.fit(train_subset)
+            train_residuals = pca.residualize(train_subset)
+            var_removed = float(np.sum(pca.explained_variance_ratio_))
+        else:
+            # No PCA step. The returns keep whatever excess they arrived with,
+            # which is the ETH-excess-only and BTC-excess-only arms.
+            pca = None
+            train_residuals = train_subset
+            var_removed = 0.0
 
         knn = KNNGraphBuilder(k=10)
         corr = knn.compute_correlation_matrix(train_residuals)
         adj = knn.build_weighted_knn(corr)
 
-        sponge = SPONGEClustering(n_clusters=3, random_state=42)
         try:
-            sponge.fit(adj)
-            labels = sponge.labels_
+            labels = clusterer(adj, n_clusters)
         except Exception:
             return pd.DataFrame(0, index=test_dates, columns=full_returns.columns)
+        labels = np.asarray(labels)
 
         unique_labels = np.unique(labels)
         cluster_cohesion = {}
@@ -148,7 +184,25 @@ def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
 
         context_start = test_dates[0] - pd.Timedelta(days=L + 30)
         context_slice = full_returns.loc[context_start:test_dates[-1], assets_list].fillna(0)
-        context_residuals = pca.residualize(context_slice)
+        context_residuals = (pca.residualize(context_slice) if pca is not None
+                             else context_slice)
+
+        if diagnostics is not None:
+            off_diag = adj.to_numpy().copy()
+            np.fill_diagonal(off_diag, 0.0)
+            n = off_diag.shape[0]
+            n_pairs = n * (n - 1)
+            diagnostics.append({
+                'rebalance_date': rebalance_date,
+                'n_assets': n,
+                'variance_removed': var_removed,
+                # share of possible ordered pairs carrying an edge
+                'graph_density': float((off_diag != 0).sum() / n_pairs) if n_pairs else np.nan,
+                'negative_edge_share': (float((off_diag < 0).sum() / max((off_diag != 0).sum(), 1))),
+                'labels': labels.copy(),
+                'assets': list(assets_list),
+                'n_clusters_found': int(len(np.unique(labels))),
+            })
 
         cluster_labels_array = np.array([labels[assets_list.index(col)] for col in assets_list])
         strategy = ClusterDeviationStrategy(

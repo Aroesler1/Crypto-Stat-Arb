@@ -111,12 +111,28 @@ def deribit_perp_symbols() -> set[str]:
             if i.get("settlement_period") == "perpetual"}
 
 
-def binance_perp_symbols() -> set[str]:
-    """Enumerate Binance USD-M perpetuals from the static archive's S3 listing.
+def binance_symbol_map() -> dict[str, str]:
+    """Base asset -> Binance contract symbol, from the static archive's listing.
 
-    Uses the archive rather than ``fapi``, which returns HTTP 451 to a US IP.
-    The listing is paged; ``IsTruncated`` drives the loop rather than a guess.
+    The funding files are addressed by contract symbol, not base asset, and the
+    two differ whenever Binance applies a multiplier: BONK's funding lives under
+    ``1000BONKUSDT``. Where several contracts share a base (a USDT and a USDC
+    quote, say) the USDT one wins, because it is the deeper market and has the
+    longer history.
     """
+    out: dict[str, str] = {}
+    for raw in _binance_raw_symbols():
+        base = normalize_base(raw)
+        if not base:
+            continue
+        current = out.get(base)
+        if current is None or (raw.endswith("USDT") and not current.endswith("USDT")):
+            out[base] = raw
+    return out
+
+
+def _binance_raw_symbols() -> set[str]:
+    """Raw contract symbols under the funding-rate prefix."""
     out: set[str] = set()
     marker = ""
     while True:
@@ -128,11 +144,19 @@ def binance_perp_symbols() -> set[str]:
             rf"<Prefix>{re.escape(BINANCE_FUNDING_PREFIX)}([^<]+)/</Prefix>", body)
         if not prefixes:
             break
-        out.update(normalize_base(p) for p in prefixes)
+        out.update(prefixes)
         if "<IsTruncated>true</IsTruncated>" not in body:
             break
         marker = BINANCE_FUNDING_PREFIX + prefixes[-1] + "/"
-    return {s for s in out if s}
+    return {s.strip().upper() for s in out if s.strip()}
+
+
+def binance_perp_symbols() -> set[str]:
+    """Base assets with a Binance USD-M perpetual.
+
+    Uses the archive rather than ``fapi``, which returns HTTP 451 to a US IP.
+    """
+    return {b for b in (normalize_base(s) for s in _binance_raw_symbols()) if b}
 
 
 _FETCHERS = {

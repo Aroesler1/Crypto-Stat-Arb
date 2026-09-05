@@ -21,11 +21,11 @@ Three derived parquet files, all keyed on `cmc_id`. They are the output of `stat
 
 The universe table and the OHLCV panel are split rather than kept in one file because a single flat table would repeat every token's metadata across ~760 daily rows. Join them on `cmc_id`.
 
-**`cmc_id` is the key everywhere, never `symbol`.** CoinMarketCap reuses tickers across projects, and this sample contains dead tokens : BTM, ERC20, BTCU : whose symbols now belong to something else. A symbol-keyed join splices the corpse and the successor into one price series and reports the join as a return. A regression test in `tests/test_pit_universe.py` pins this.
+**`cmc_id` is the key everywhere, never `symbol`.** CoinMarketCap reuses tickers across projects, and this sample contains dead tokens (BTM, ERC20, BTCU) whose symbols now belong to something else. A symbol-keyed join splices the corpse and the successor into one price series and reports the join as a return. A regression test in `tests/test_pit_universe.py` pins this.
 
 ## What is not committed
 
-The raw CoinMarketCap pull, cached under `data/raw_cmc/` and gitignored: roughly 2,000 JSON responses turned into one parquet per `cmc_id`. It is a cache, not a source of truth : the derived tables above are what results depend on, and they are committed so the repository stays reproducible even if the endpoint changes. Delete `data/raw_cmc/` to force a fresh pull, or leave it in place so an interrupted build resumes.
+The raw CoinMarketCap pull, cached under `data/raw_cmc/` and gitignored: roughly 2,000 JSON responses turned into one parquet per `cmc_id`. It is a cache, not a source of truth; the derived tables above are what results depend on, and they are committed so the repository stays reproducible even if the endpoint changes. Delete `data/raw_cmc/` to force a fresh pull, or leave it in place so an interrupted build resumes.
 
 ## Endpoints
 
@@ -148,4 +148,4 @@ it were the whole universe.
 
 No vendor licence applies.
 
-The survivorship limitation this file used to describe as binding : "the universe is a CoinMarketCap snapshot and excludes dead tokens" : is now measured rather than assumed. It is worth a net Sharpe of 2.02 against -0.14. See the README, which leads with it.
+The survivorship limitation this file used to describe as binding, "the universe is a CoinMarketCap snapshot and excludes dead tokens", is now measured rather than assumed. It is worth a net Sharpe of 2.02 against -0.14. See the README, which leads with it.

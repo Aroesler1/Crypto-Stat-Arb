@@ -127,3 +127,26 @@ def test_is_deterministic_for_a_fixed_seed():
 def test_degenerate_input_raises_rather_than_returning_nonsense(frame):
     with pytest.raises(ValueError):
         romano_wolf_stepdown(frame)
+
+
+def test_deflated_sharpe_needs_per_period_trial_sharpes():
+    """The unit convention that produced a table of zeros.
+
+    `deflated_sharpe_ratio` documents `trial_sharpes` as PER-PERIOD. Passing
+    annualised figures inflates the cross-trial variance by the annualisation
+    factor squared, which drives the expected-maximum benchmark up and the
+    deflated Sharpe to exactly zero for every member of the family. The first
+    signal-ablation run reported DSR 0.000 in all 42 cells for this reason.
+    """
+    from stat_arb.backtest.statistics import deflated_sharpe_ratio
+
+    rng = np.random.default_rng(0)
+    returns = pd.Series(rng.normal(0.0008, 0.01, 2000))
+    annualised = [1.45, 0.40, -0.23, -0.31, -0.42, -0.80, -1.14]
+    per_period = [a / np.sqrt(365.0) for a in annualised]
+
+    correct = deflated_sharpe_ratio(returns, 7, per_period)["dsr"]
+    wrong = deflated_sharpe_ratio(returns, 7, annualised)["dsr"]
+    assert 0.0 < correct < 1.0
+    assert wrong == pytest.approx(0.0, abs=1e-12)
+    assert correct > wrong

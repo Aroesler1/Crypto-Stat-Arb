@@ -44,9 +44,24 @@ from stat_arb.data import death_model as DM  # noqa: E402
 from stat_arb.signals.cluster_deviation import ClusterDeviationStrategy  # noqa: E402
 from stat_arb.signals.ou_score import (  # noqa: E402
     BetaAdjustedDeviation, ClusterMomentumOverlay, OUScoreStrategy,
-    ewma_zscore, half_life_position_scale,
+    ewma_zscore, half_life_position_scale, s_scores,
 )
 from stat_arb.run_phase3 import annualized_sharpe  # noqa: E402
+
+PERIODS_PER_YEAR = 365
+
+ARMS = ("baseline", "ou", "ou_nofilter", "beta", "ewma", "ewma_sized",
+        "momentum", "death")
+
+# The EWMA half-life was fixed at 10 days before any of these results were seen,
+# and the sweep below is reported as ROBUSTNESS, not as a selection. The 10-day
+# row is the pre-set default; 5 and 20 exist so a reader can see whether the
+# result depends on the choice.
+EWMA_DEFAULT_HALFLIFE = 10.0
+EWMA_HALFLIFE_SWEEP = (5.0, 10.0, 20.0)
+ROBUSTNESS_BRACKET = "B3"
+N_BEST_DAYS = 10
+
 from stat_arb.run_residualization_ablation import (  # noqa: E402
     BEST_BAND, BEST_FREQ, load_inputs, run_arm,
 )
@@ -68,10 +83,16 @@ DEATH_WORST_FRACTION = 0.10
 
 
 class EWMAClusterDeviation(ClusterDeviationStrategy):
-    """Cluster deviation with EWMA standardisation and half-life sizing.
+    """Cluster deviation standardised with an EWMA instead of a rolling window.
 
-    Subclasses the control rather than reimplementing it, so the only difference
-    is the standardisation and the position scale.
+    This arm changes the STANDARDISATION and nothing else. It does not size by
+    half-life; `EWMASizedClusterDeviation` below does that, and the two run as
+    separate arms so the table can say which half of the brief's item (c) pays.
+
+    A 20-day rolling standard deviation steps discontinuously every time a large
+    move enters or leaves the window, and on a micro-cap panel that step is
+    noise injected into the denominator of every signal sharing it. An EWMA
+    decays instead of dropping.
     """
 
     def __init__(self, lookback=5, zscore_window=20, halflife=10.0, **kw):
@@ -90,6 +111,54 @@ class EWMAClusterDeviation(ClusterDeviationStrategy):
             dev[cols] = returns[cols].sub(returns[cols].mean(axis=1), axis=0)
         cumulative = dev.rolling(self.lookback, min_periods=2).sum()
         return ewma_zscore(cumulative, halflife=self.halflife).shift(lag)
+
+
+class EWMASizedClusterDeviation(EWMAClusterDeviation):
+    """EWMA standardisation PLUS position size proportional to signal half-life.
+
+    Completes the brief's item (c): a signal expected to revert in a day is
+    worth more per unit of z-score than one expected to take a week, because the
+    book only holds it for the rebalance interval. Half-lives come from the same
+    OU fit the s-score arm uses, so the two arms are measuring the same
+    quantity.
+    """
+
+    def __init__(self, lookback=5, zscore_window=20, halflife=10.0,
+                 ou_window=60, size_target=3.0, **kw):
+        super().__init__(lookback=lookback, zscore_window=zscore_window,
+                         halflife=halflife, **kw)
+        self.ou_window = ou_window
+        self.size_target = size_target
+        self.half_lives_ = None
+
+    def compute_signals(self, returns, cluster_labels, tokens, lag=1):
+        signals = super().compute_signals(returns, cluster_labels, tokens, lag=lag)
+        token_to_cluster = {t: cluster_labels[i] for i, t in enumerate(tokens)}
+        col_token = {c: c.replace("_returns", "") for c in returns.columns}
+        dev = pd.DataFrame(index=returns.index, columns=returns.columns, dtype=float)
+        for cluster in np.unique(cluster_labels):
+            cols = [c for c in returns.columns
+                    if token_to_cluster.get(col_token[c], None) == cluster]
+            if len(cols) < 2:
+                continue
+            dev[cols] = returns[cols].sub(returns[cols].mean(axis=1), axis=0)
+        # max_half_life=None: this arm SIZES by the half-life rather than
+        # filtering on it, so nothing is dropped for reverting slowly.
+        _, half_lives = s_scores(dev.dropna(axis=1, how="all"),
+                                 self.ou_window, max_half_life=None)
+        self.half_lives_ = half_lives.reindex(columns=returns.columns).shift(lag)
+        return signals
+
+    def generate_target_weights(self, signals, cluster_labels, tokens,
+                                returns=None, clusters_to_trade=None):
+        weights = super().generate_target_weights(signals, cluster_labels, tokens,
+                                                  returns, clusters_to_trade)
+        if self.half_lives_ is None:
+            return weights
+        scale = half_life_position_scale(
+            self.half_lives_.reindex(index=weights.index, columns=weights.columns),
+            target=self.size_target)
+        return weights * scale.fillna(0.25)
 
 
 def make_death_filter(death_probs: pd.DataFrame, cols_to_id: dict,
@@ -129,6 +198,51 @@ def make_death_filter(death_probs: pd.DataFrame, cols_to_id: dict,
     return filt
 
 
+def sharpe_by_year(net: pd.Series) -> dict[int, float]:
+    """Annualised net Sharpe within each calendar year."""
+    r = pd.to_numeric(net, errors="coerce").dropna()
+    out = {}
+    for year, g in r.groupby(r.index.year):
+        if len(g) < 30 or g.std(ddof=1) == 0:
+            continue
+        out[int(year)] = float(g.mean() / g.std(ddof=1) * np.sqrt(PERIODS_PER_YEAR))
+    return out
+
+
+def best_days_stats(net: pd.Series, k: int = N_BEST_DAYS) -> dict:
+    """How much of the result rides on a handful of days.
+
+    A book whose Sharpe collapses once its best `k` days are removed is not a
+    strategy, it is a few lucky sessions. Reported as the Sharpe excluding those
+    days and their share of total return, both of which have to be read together:
+    a large share with an unchanged Sharpe means the good days were big but the
+    rest still worked.
+    """
+    r = pd.to_numeric(net, errors="coerce").dropna()
+    if len(r) < k + 30:
+        return {"sharpe_ex_best": np.nan, "best_days_share": np.nan}
+    best = r.nlargest(k).index
+    rest = r.drop(best)
+    total = float(r.sum())
+    return {
+        "sharpe_ex_best": (float(rest.mean() / rest.std(ddof=1) * np.sqrt(PERIODS_PER_YEAR))
+                           if rest.std(ddof=1) > 0 else np.nan),
+        "best_days_share": (float(r.loc[best].sum() / total) if total != 0 else np.nan),
+    }
+
+
+def robustness_row(net: pd.Series, turnover: float, **meta) -> dict:
+    row = dict(meta)
+    row["net_sharpe"] = (float(net.mean() / net.std(ddof=1) * np.sqrt(PERIODS_PER_YEAR))
+                         if net.std(ddof=1) > 0 else np.nan)
+    row["turnover"] = float(turnover)
+    row["n_days"] = int(net.notna().sum())
+    row.update(best_days_stats(net))
+    for year, value in sharpe_by_year(net).items():
+        row[f"sharpe_{year}"] = value
+    return row
+
+
 def arm_kwargs(name: str, death_filter=None) -> dict:
     if name == "baseline":
         return {}
@@ -143,7 +257,14 @@ def arm_kwargs(name: str, death_filter=None) -> dict:
             beta_window=60, zscore_window=L)}
     if name == "ewma":
         return {"strategy_factory": lambda H, L: EWMAClusterDeviation(
-            lookback=H, zscore_window=L, halflife=10.0)}
+            lookback=H, zscore_window=L, halflife=EWMA_DEFAULT_HALFLIFE)}
+    if name == "ewma_sized":
+        return {"strategy_factory": lambda H, L: EWMASizedClusterDeviation(
+            lookback=H, zscore_window=L, halflife=EWMA_DEFAULT_HALFLIFE)}
+    if name.startswith("ewma_hl"):
+        hl = float(name.split("ewma_hl")[1])
+        return {"strategy_factory": lambda H, L, _hl=hl: EWMAClusterDeviation(
+            lookback=H, zscore_window=L, halflife=_hl)}
     if name == "momentum":
         overlay = ClusterMomentumOverlay(momentum_window=28, top_frac=0.5)
         return {"cluster_selector": overlay.clusters_to_trade}
@@ -152,7 +273,6 @@ def arm_kwargs(name: str, death_filter=None) -> dict:
     raise ValueError(name)
 
 
-ARMS = ("baseline", "ou", "ou_nofilter", "beta", "ewma", "momentum", "death")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -165,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--brackets", default="B1,B2,B3")
     ap.add_argument("--treatments", default="pit,survivor-only")
     ap.add_argument("--arms", default=",".join(ARMS))
+    ap.add_argument("--no-halflife-sweep", action="store_true")
     args = ap.parse_args(argv)
 
     root = Path(__file__).resolve().parent.parent
@@ -204,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
         cols_to_id = {f"{int(c)}_returns": int(c) for c in close.columns}
         death_filter = make_death_filter(probs, cols_to_id)
 
-    rows, series = [], {}
+    rows, series, robustness = [], {}, []
     for bracket in [b.strip() for b in args.brackets.split(",") if b.strip()]:
         ids = sorted({int(c) for c in
                       assignments.loc[assignments["bracket"] == bracket, "cmc_id"]})
@@ -228,11 +349,48 @@ def main(argv: list[str] | None = None) -> int:
                 if stats is None:
                     print("    produced no positions, skipped")
                     continue
+                if bracket == ROBUSTNESS_BRACKET:
+                    robustness.append(robustness_row(
+                        stats["net_series_for_funding"].dropna(), stats["turnover"],
+                        bracket=bracket, treatment=treatment, arm=arm,
+                        halflife=(EWMA_DEFAULT_HALFLIFE
+                                  if arm in ("ewma", "ewma_sized") else np.nan),
+                        role="arm"))
                 for _k in ("net_series_for_funding", "weights"):
                     stats.pop(_k, None)
                 stats.update(bracket=bracket, treatment=treatment, arm=arm,
                              reference=reference)
                 rows.append(stats)
+
+    # Half-life sensitivity, reported as ROBUSTNESS rather than selection: the
+    # 10-day value was fixed before any of these results were seen, and 5 and 20
+    # are here so a reader can see whether the finding depends on the choice.
+    if ROBUSTNESS_BRACKET in args.brackets and not args.no_halflife_sweep:
+        bids = sorted({int(c) for c in
+                       assignments.loc[assignments["bracket"] == ROBUSTNESS_BRACKET,
+                                       "cmc_id"]})
+        bids = [c for c in bids if c in close.columns]
+        base = B.bracket_membership(assignments, index, ROBUSTNESS_BRACKET, columns=bids)
+        reference = BEST_REFERENCE.get(ROBUSTNESS_BRACKET, "eth")
+        for treatment in [t.strip() for t in args.treatments.split(",") if t.strip()]:
+            member = base.copy()
+            if treatment != "pit":
+                for c in member.columns:
+                    if int(c) in dead:
+                        member[c] = False
+            for hl in EWMA_HALFLIFE_SWEEP:
+                if hl == EWMA_DEFAULT_HALFLIFE:
+                    continue        # already run as the `ewma` arm
+                print(f"  {ROBUSTNESS_BRACKET} / {treatment} / ewma halflife={hl:g} ...",
+                      flush=True)
+                stats = run_arm(close, volume, table, refs, reference, 0, member, index,
+                                **arm_kwargs(f"ewma_hl{hl:g}"))
+                if stats is None:
+                    continue
+                robustness.append(robustness_row(
+                    stats["net_series_for_funding"].dropna(), stats["turnover"],
+                    bracket=ROBUSTNESS_BRACKET, treatment=treatment, arm="ewma",
+                    halflife=hl, role="halflife_sweep"))
 
     if not rows:
         print("no arm produced a result")
@@ -278,6 +436,31 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {r['arm']:<13s} {r['gross_sharpe']:6.2f} {r['net_sharpe']:6.2f} "
                       f"{r.get('psr', np.nan):6.3f} {r.get('dsr', np.nan):6.3f} "
                       f"{r['turnover']:9.3f} {r['breakeven_bps']:10.0f}")
+
+    if robustness:
+        rob = pd.DataFrame(robustness)
+        rob.loc[(rob["role"] == "halflife_sweep")
+                | ((rob["arm"] == "ewma") & (rob["role"] == "arm")), "is_default"] = \
+            rob["halflife"] == EWMA_DEFAULT_HALFLIFE
+        year_cols = sorted(c for c in rob.columns if c.startswith("sharpe_")
+                           and c != "sharpe_ex_best")
+        front = ["bracket", "treatment", "arm", "role", "halflife", "is_default",
+                 "net_sharpe", "sharpe_ex_best", "best_days_share", "turnover", "n_days"]
+        rob = rob[[c for c in front if c in rob.columns] + year_cols]
+        rob.to_csv(out_dir / "ewma_robustness.csv", index=False)
+
+        print(f"\n=== {ROBUSTNESS_BRACKET} robustness "
+              f"(net Sharpe, and what it survives) ===")
+        print("  treatment       arm          hl    net   ex-best  best-10 share  turnover")
+        for _, r in rob.iterrows():
+            hl = "-" if not np.isfinite(r["halflife"]) else f"{r['halflife']:.0f}"
+            mark = " *" if r.get("is_default") is True else "  "
+            print(f"  {r['treatment']:<14s} {r['arm']:<11s} {hl:>3s}{mark} "
+                  f"{r['net_sharpe']:6.2f} {r['sharpe_ex_best']:8.2f} "
+                  f"{100 * r['best_days_share']:12.1f}% {r['turnover']:9.3f}")
+        print(f"  * pre-set default half-life ({EWMA_DEFAULT_HALFLIFE:g} days); the other")
+        print("    rows are robustness, not selection")
+        print(f"  saved -> {out_dir / 'ewma_robustness.csv'}")
 
     print(f"\nsaved -> {out_dir / 'signal_ablation.csv'}")
     return 0

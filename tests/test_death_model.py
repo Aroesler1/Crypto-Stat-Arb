@@ -218,3 +218,58 @@ def test_rank_is_differenced_not_ratioed():
     rank0 = out[(out["field"] == "rank") & (out["day"] == -60)
                 & (out["group"] == "dead")]["mean"].iloc[0]
     assert rank0 == pytest.approx(0.0, abs=1e-9)
+
+
+# --- the death gate must actually gate ------------------------------------
+
+def test_quantile_gate_bites_regardless_of_the_probability_scale():
+    """Why the gate is a cross-sectional quantile, not an absolute cutoff.
+
+    The classifier is fitted with class_weight="balanced" on a label whose base
+    rate is around 1%, so its scores are centred by construction rather than
+    calibrated to that rate. On the real panel the median out-of-sample
+    probability is 0.497 and only 0.41% ever reach 0.80, so an absolute 0.8
+    cutoff gated almost nothing and the filtered book came out identical to the
+    unfiltered one in all six bracket-treatment cells. That reads as "death is
+    not forecastable" when it means "the gate never fired".
+
+    A quantile gate cannot fail that way: whatever the scale of the scores, it
+    refuses the requested share of the cross-section.
+    """
+    from stat_arb.run_signal_ablation import make_death_filter
+
+    dates = pd.date_range("2020-01-01", periods=3)
+    n = 40
+    for scale in (0.001, 0.5, 0.99):        # any centring of the scores
+        probs = pd.DataFrame({
+            "date": np.repeat(dates, n),
+            "cmc_id": list(range(n)) * len(dates),
+            "death_prob": np.tile(np.linspace(scale * 0.5, scale, n), len(dates)),
+        })
+        cols_to_id = {f"{i}_returns": i for i in range(n)}
+        filt = make_death_filter(probs, cols_to_id, worst_fraction=0.10)
+        weights = pd.DataFrame(1.0, index=dates[1:], columns=list(cols_to_id))
+        out = filt(weights, list(cols_to_id), dates[1:])
+        zeroed = int((out.iloc[0] == 0).sum())
+        assert 3 <= zeroed <= 6, (scale, zeroed)   # about 10% of 40
+
+
+def test_gate_drops_longs_but_keeps_shorts():
+    """A token about to die is a fine thing to be short."""
+    from stat_arb.run_signal_ablation import make_death_filter
+
+    dates = pd.date_range("2020-01-01", periods=2)
+    n = 40
+    probs = pd.DataFrame({
+        "date": np.repeat(dates, n),
+        "cmc_id": list(range(n)) * len(dates),
+        "death_prob": np.tile(np.linspace(0.1, 0.9, n), len(dates)),
+    })
+    cols_to_id = {f"{i}_returns": i for i in range(n)}
+    filt = make_death_filter(probs, cols_to_id, worst_fraction=0.25)
+    # the riskiest names are the high-numbered ones; make half of them short
+    weights = pd.DataFrame(1.0, index=dates[1:], columns=list(cols_to_id))
+    weights.iloc[0, -5:] = -1.0
+    out = filt(weights, list(cols_to_id), dates[1:])
+    assert (out.iloc[0, -5:] == -1.0).all()      # shorts survive
+    assert (out.iloc[0, -10:-5] == 0.0).all()    # risky longs are cut

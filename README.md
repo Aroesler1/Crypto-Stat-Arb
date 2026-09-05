@@ -57,20 +57,24 @@ cross-section, not a defect in the data.
 Measured on the point-in-time universe with the signal held fixed
 (2% no-trade band, rebalance every 3 days, net of 50 bps, $50k/day floor):
 
-| bracket | best net Sharpe | best reference | breakeven | shortable share (2025) | verdict |
-|---|---|---|---|---|---|
-| B0 mega | not yet measured | BTC / value-weighted | - | 100% | shortable, too few names to cluster |
-| B1 large | **+0.40** | ETH-excess, no PCA | 98 bps | 87% | the only bracket that is net positive and shortable, but clusterable in 20 of 114 months |
-| B2 mid | -0.24 | value-weighted | 0 bps | 76% | clusterable and mostly shortable, no edge |
-| B3 small | -0.42 | ETH-excess, no PCA | 0 bps | 48% | the original band: always clusterable, never shortable, no edge |
+| bracket | best signal | net @50bps | tradeable, after funding | verdict |
+|---|---|---|---|---|
+| B0 mega | not clustered | - | - | never reaches 30 members; a pairs book, not a cluster book |
+| B1 large | death filter | +0.52 | **-0.04** | shortable, but only 18 names survive the cut, below the clustering floor |
+| B2 mid | ewma | +0.44 | **-0.22** | clusterable and half shortable; the edge does not survive the restriction |
+| B3 small | ewma | +1.45 | **+1.48** | the original band, and the only one that survives every restriction |
 
-The expected shape holds, and it is a squeeze. Dispersion worth clustering lives
-where the names cannot be shorted; the names that can be shorted are too few to
-cluster. B1 is the one bracket where a positive net Sharpe and a tradable short
-leg coexist, and it is thin for four fifths of the sample.
+The answer is not the one the perpetual-coverage table suggested: **the original
+small-cap band is the one that works, and it works because it is big enough to
+survive being cut down.** B3 loses two thirds of its members to the shortability
+restriction and still has 87, comfortably above the 30 needed to cluster. B1 has
+the best shortability in the panel and only 18 names left after the cut, below
+the floor. Size of cross-section, not availability of a short, is what binds.
 
-**The clustering and execution methodology is the contribution. The Sharpe is
-survivorship, and the one bracket that survives is too thin to hold it.**
+**The clustering and execution methodology is the contribution. The Sharpe was
+survivorship, and what recovers it is not better clustering but a better
+standardisation: an EWMA z-score in place of a 20-day rolling one is worth 1.9
+Sharpe on the small-cap bracket, point-in-time, after costs and funding.**
 
 ## Clustering methods compared, and a dumb baseline that wins
 
@@ -182,6 +186,106 @@ report's plain ETH-excess.
 ablation was run to answer: ETH-excess for B1 and B3, the value-weighted market
 for B2. The B2 and B3 differences are between negative numbers, so they rank
 least-bad rather than best.
+
+## Signal extensions: the standardisation was throwing the signal away
+
+Seven arms per bracket, each changing one thing about how the deviation from a
+cluster is measured or sized, everything else held fixed. Net Sharpe at 50 bps
+on the point-in-time universe, with the Deflated Sharpe Ratio treating the seven
+arms in a cell as the multiple-testing pool:
+
+| arm | B1 | B2 | B3 | B3 DSR |
+|---|---|---|---|---|
+| **ewma** | -0.03 | **+0.44** | **+1.45** | **0.824** |
+| **death filter** | **+0.52** | -0.20 | -0.29 | 0.000 |
+| baseline (published signal) | +0.40 | -0.24 | -0.42 | 0.000 |
+| ou (s-score, half-life filter) | -0.49 | +0.15 | -0.31 | 0.000 |
+| ou_nofilter | -0.80 | -0.36 | -0.80 | 0.000 |
+| momentum overlay | -0.07 | -0.11 | -0.23 | 0.000 |
+| beta-adjusted | -1.04 | -0.96 | -1.14 | 0.000 |
+
+Full table with PSR, turnover and breakeven, and the survivor-only half:
+`stat_arb/reporting/brackets/signal_ablation.csv`.
+
+**EWMA standardisation is the single largest effect in this project.** On B3
+point-in-time it takes the book from -0.42 to +1.45, a breakeven above 500 bps,
+and a Deflated Sharpe of 0.824 against a seven-arm pool. Nothing else in this
+repository's history has produced a positive net Sharpe on a survivorship-free
+small-cap universe.
+
+It survives the checks that usually kill a result like that:
+
+* **Not concentration.** Excluding its ten best days the Sharpe is 1.40 against
+  1.45, and those ten days are 7.1% of total return. The baseline's ten best
+  days are 35.5% of its return.
+* **Positive in all ten years**, from 3.62 in 2016 to 2.02 in 2025, worst year
+  0.44 in 2023.
+* **Not survivorship.** It is +1.45 point-in-time and +1.40 survivor-only.
+  Everything else on B3 shows a large gap between the two; a signal that does
+  not depend on which losers were deleted is the one worth having.
+* **Not a flat book.** Turnover 0.041 against the baseline's 0.053.
+
+The mechanism is unglamorous. The published signal standardises the cluster
+deviation with a 20-day rolling mean and standard deviation. On a micro-cap
+panel that denominator steps discontinuously every time a large move enters or
+leaves the window, and that step is noise injected into every signal sharing it.
+An exponentially weighted mean and standard deviation decay instead of dropping,
+and on the bracket with the most volatile members it is worth 1.9 Sharpe. The
+clustering, the residualization and the execution controls are identical.
+
+**The death filter is the only arm that helps B1**, taking it from +0.40 to
++0.52 with a breakeven of 111 bps. It gates the long leg of the decile of names
+the walk-forward classifier scores most likely to be delisted within 30 days.
+The classifier is weak, mean out-of-sample AUC 0.565 over nine years (range
+0.514 to 0.595), and its usable signal is not the feature we were worried about:
+the standardised coefficients are dominated by rank deterioration (+0.21 to
++0.30) and falling volume (-0.13 to -0.20), while days-since-listing contributes
+little and changes sign across years.
+
+Two arms are worth reporting for going the wrong way. The **beta-adjusted
+deviation is the worst arm in every bracket**, which says the raw gap to the
+cluster composite is a better trade than the regression residual: estimating a
+beta per token per window on this data adds more noise than the mismatch it
+corrects. And the **OU s-score is better with its half-life filter than without
+it in every cell**, which is the Avellaneda-Lee condition earning its place:
+dropping tokens whose implied reversion is slower than the holding horizon is
+worth 0.3 to 0.5 Sharpe.
+
+## The tradability verdict, and it is not the expected shape
+
+Restricting each bracket to names with a listed perpetual on Binance,
+Hyperliquid, dYdX v4 or Deribit, then charging measured funding to the positions
+actually held:
+
+| bracket | all names | shortable only | after funding | members kept | funding covered |
+|---|---|---|---|---|---|
+| B1 large | +0.40 | -0.15 | **-0.04** | 18 of 21 (86%) | 44% |
+| B2 mid | +0.44 | -0.27 | **-0.22** | 57 of 99 (58%) | 27% |
+| B3 small | +1.45 | +1.49 | **+1.48** | 87 of 261 (33%) | 14% |
+
+**This is the opposite of the expected shape.** The prediction was that large
+caps would be shortable but short of dispersion, and small caps would have the
+dispersion but no shorts. What happens instead is that B3 keeps only a third of
+its names and performs slightly better on the survivors of that cut, while B1
+and B2 keep most of theirs and are destroyed by it.
+
+The reason is the clustering floor rather than anything about dispersion. B3
+retains 87 shortable members, comfortably above the 30 needed to cluster, so the
+book is intact. B1 falls to 18, below the floor, and B2's 57 come from a bracket
+whose signal was marginal to begin with. Shortability does not bind on B3
+because B3 is large enough to lose two thirds of itself and still be a
+cross-section.
+
+Funding is close to irrelevant at these sizes: it costs B3 0.01 Sharpe and
+actually helps B1, whose short leg earns more funding than it pays.
+
+**The after-funding column is a lower bound on the cost, not a full
+accounting.** The Binance archive's funding history starts in 2020 while the
+panel starts in 2016, and only Binance funding was pulled, so a token shortable
+only on Hyperliquid, dYdX or Deribit contributes zero rather than its own rate.
+On B3 that leaves 14% of the book's return columns carrying a measured funding
+series. Closing that gap is the most obvious next piece of work, and it can only
+move the number down.
 
 ## Survivorship is a small-cap phenomenon, and it scales down the spectrum
 

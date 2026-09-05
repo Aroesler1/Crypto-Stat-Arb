@@ -35,6 +35,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from stat_arb.data import funding as HL  # noqa: E402
 from stat_arb.data import perps as PERPS  # noqa: E402
 
 
@@ -119,6 +120,62 @@ def stack(raw_dir: Path, symbol_map: dict[str, str]) -> pd.DataFrame:
             .sort_values(["base", "date"]).reset_index(drop=True))
 
 
+def pull_hyperliquid(raw_dir: Path, start: str, end: str,
+                     force: bool = False) -> pd.DataFrame:
+    """Daily funding for every perpetual Hyperliquid lists.
+
+    Binance is the deeper venue and covers more names, but its archive starts in
+    2020 and it does not list everything. Hyperliquid is on-chain, ungated from a
+    US IP, and lists 233 bases; its history is short because the venue launched
+    in 2023, but for the names it covers it is a measured rate where the
+    alternative is assuming zero.
+
+    Cached one parquet per coin. The raw Hyperliquid coin name is kept as the
+    cache key (it uses multiplier prefixes like kPEPE), and the normalised base
+    is what the panel joins on.
+    """
+    out_dir = raw_dir / "hyperliquid_funding"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        meta = HL._post({"type": "meta"})
+        coins = [a["name"] for a in meta["universe"]]
+    except Exception as exc:
+        print(f"  hyperliquid unreachable ({type(exc).__name__}), skipped", flush=True)
+        return pd.DataFrame(columns=["date", "base", "symbol", "funding_rate"])
+
+    start_ms = int(pd.Timestamp(start).timestamp() * 1000)
+    end_ms = int(pd.Timestamp(end).timestamp() * 1000)
+    print(f"  hyperliquid: {len(coins)} perpetual coins", flush=True)
+
+    frames, done = [], 0
+    for coin in coins:
+        path = out_dir / f"{coin}.parquet"
+        if path.exists() and not force:
+            df = pd.read_parquet(path)
+        else:
+            try:
+                df = HL.fetch_funding(coin, start_ms, end_ms)
+            except Exception:
+                df = pd.DataFrame(columns=["time", "funding_rate"])
+            df.to_parquet(path, index=False)
+        done += 1
+        if done % 50 == 0:
+            print(f"    {done}/{len(coins)} coins", flush=True)
+        if df.empty:
+            continue
+        daily = (df.set_index("time")["funding_rate"].sort_index()
+                 .resample("D").sum().rename("funding_rate").reset_index()
+                 .rename(columns={"time": "date"}))
+        daily["base"] = PERPS.normalize_base(coin)
+        daily["symbol"] = coin
+        frames.append(daily)
+
+    if not frames:
+        return pd.DataFrame(columns=["date", "base", "symbol", "funding_rate"])
+    return pd.concat(frames, ignore_index=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -127,6 +184,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--sleep", type=float, default=0.05)
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--start", default="2016-01-01")
+    ap.add_argument("--end", default="2025-07-31")
+    ap.add_argument("--no-hyperliquid", action="store_true")
     args = ap.parse_args(argv)
 
     root = Path(__file__).resolve().parent.parent
@@ -146,6 +206,25 @@ def main(argv: list[str] | None = None) -> int:
     pull(raw_dir, pairs, args.workers, args.force)
 
     panel = stack(raw_dir, symbol_map)
+    panel["venue"] = "binance"
+
+    if not args.no_hyperliquid:
+        print("\nhyperliquid funding for the names Binance does not cover ...", flush=True)
+        hl = pull_hyperliquid(raw_dir, args.start, args.end, args.force)
+        if not hl.empty:
+            hl["venue"] = "hyperliquid"
+            before = set(panel["base"])
+            # Binance wins where both quote the same base on the same day: it is
+            # the deeper market and the longer series. Hyperliquid fills the
+            # rest, which is the point of adding it.
+            panel = pd.concat([panel, hl], ignore_index=True)
+            panel = (panel.sort_values(["base", "date", "venue"])
+                          .drop_duplicates(subset=["date", "base"], keep="first")
+                          .reset_index(drop=True))
+            added = set(panel["base"]) - before
+            print(f"  hyperliquid added {len(added)} bases Binance does not carry, "
+                  f"{len(hl):,} daily rows")
+
     if panel.empty:
         print("no funding pulled")
         return 1
@@ -155,6 +234,7 @@ def main(argv: list[str] | None = None) -> int:
           f"{panel['base'].nunique()} bases, "
           f"{panel['date'].min().date()}..{panel['date'].max().date()}, "
           f"{out.stat().st_size / 1e6:.1f} MB")
+    print(f"  by venue: {panel.groupby('venue')['base'].nunique().to_dict()}")
     ann = panel.groupby("base")["funding_rate"].mean() * 365
     print(f"annualised funding, cross-sectional: median {ann.median():+.2%}, "
           f"10th {ann.quantile(0.1):+.2%}, 90th {ann.quantile(0.9):+.2%}")

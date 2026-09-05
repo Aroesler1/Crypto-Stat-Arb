@@ -76,14 +76,42 @@ def funding_panel_wide(funding: pd.DataFrame, universe: pd.DataFrame,
                                aggfunc="last")
     wide.index = pd.to_datetime(wide.index)
     wide = wide.reindex(pd.DatetimeIndex(index))
-    out = pd.DataFrame(0.0, index=wide.index, columns=columns)
+    # NaN, not 0.0, so a missing rate stays distinguishable from a genuine
+    # zero one; `apply_funding` fills at the point of use.
+    out = pd.DataFrame(np.nan, index=wide.index, columns=columns)
     covered = []
     for col in columns:
         base = base_of.get(col)
         if base is not None and base in wide.columns:
-            out[col] = wide[base].fillna(0.0)
+            out[col] = wide[base]
             covered.append(col)
     return out, covered
+
+
+def funding_coverage(weights: pd.DataFrame, funding: pd.DataFrame,
+                     covered: list[str]) -> tuple[float, float]:
+    """How much of the book has a measured funding rate.
+
+    Two numbers, because they say different things and the naive one misleads.
+    ``by_column`` is the share of the bracket's return columns whose base appears
+    in the funding panel at all; it is dragged down by every token that passed
+    through the bracket years before any venue listed a perpetual on it,
+    including ones the book never holds. ``by_exposure`` is the share of total
+    absolute position sitting on a name with a rate on the day it is held, which
+    is what actually determines how much of the funding cost is measured rather
+    than assumed.
+    """
+    if weights.empty:
+        return float("nan"), float("nan")
+    by_column = len(covered) / max(len(weights.columns), 1)
+
+    w = weights.shift(1).abs().fillna(0.0)
+    f = funding.reindex(index=w.index, columns=w.columns)
+    present = f.notna()
+    total = float(w.to_numpy().sum())
+    if total <= 0:
+        return by_column, float("nan")
+    return by_column, float(w.where(present, 0.0).to_numpy().sum() / total)
 
 
 def apply_funding(weights: pd.DataFrame, funding: pd.DataFrame) -> pd.Series:
@@ -169,7 +197,8 @@ def main(argv: list[str] | None = None) -> int:
             stats.pop("net_series", None)
             stats.update(bracket=bracket, subset=label, arm=arm, reference=reference,
                          funding_ann=np.nan, net_sharpe_after_funding=np.nan,
-                         funding_coverage=np.nan)
+                         funding_coverage=np.nan,
+                         funding_coverage_exposure=np.nan)
             rows.append(stats)
 
         # funding is only meaningful on the subset that can actually be shorted
@@ -187,7 +216,9 @@ def main(argv: list[str] | None = None) -> int:
             row["net_series_for_funding"].index).fillna(0.0)
         row["funding_ann"] = float(fund_pnl.mean()) * PERIODS_PER_YEAR
         row["net_sharpe_after_funding"] = annualized_sharpe(net_after)
-        row["funding_coverage"] = len(covered) / max(len(cols), 1)
+        by_col, by_exp = funding_coverage(weights, fwide, covered)
+        row["funding_coverage"] = by_col
+        row["funding_coverage_exposure"] = by_exp
         row.pop("net_series_for_funding", None)
 
     if not rows:
@@ -203,23 +234,26 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"\n=== tradability by bracket (point-in-time, band {BEST_BAND:.0%}, "
           f"rebalance {BEST_FREQ}d, net 50bps) ===")
-    print("  bracket  subset           members  gross    net  after funding  breakeven  funding cov")
+    print("  bracket  subset           members  gross    net  after funding  breakeven"
+          "   cov(col)  cov(exp)")
     for _, r in out.iterrows():
         af = ("-" if not np.isfinite(r["net_sharpe_after_funding"])
               else f"{r['net_sharpe_after_funding']:.2f}")
         cov = ("-" if not np.isfinite(r["funding_coverage"])
                else f"{100 * r['funding_coverage']:.0f}%")
+        cove = ("-" if not np.isfinite(r.get("funding_coverage_exposure", np.nan))
+                else f"{100 * r['funding_coverage_exposure']:.0f}%")
         print(f"  {r['bracket']:<7s}  {r['subset']:<15s} {r['avg_members']:7.0f} "
               f"{r['gross_sharpe']:6.2f} {r['net_sharpe']:6.2f} {af:>13s} "
-              f"{r['breakeven_bps']:10.0f} {cov:>12s}")
+              f"{r['breakeven_bps']:10.0f} {cov:>10s} {cove:>9s}")
 
-    print("\n  FUNDING COVERAGE IS PARTIAL, so the after-funding column is a LOWER")
-    print("  BOUND on the cost, not a full accounting. Two reasons: the Binance")
-    print("  archive's funding history starts in 2020 while the panel starts in")
-    print("  2016, and only Binance funding was pulled, so a token shortable only")
-    print("  on Hyperliquid, dYdX or Deribit contributes zero rather than its own")
-    print("  rate. The covered share is the fraction of the bracket's return")
-    print("  columns carrying a funding series.")
+    print("\n  cov(exp) is the share of total absolute position sitting on a name")
+    print("  with a measured funding rate on the day it is held, which is what")
+    print("  determines how much of the cost is measured rather than assumed.")
+    print("  cov(col) is the share of the bracket's return COLUMNS carrying a rate")
+    print("  at all, and is dragged down by tokens that passed through the bracket")
+    print("  years before any venue listed a perpetual on them, including names the")
+    print("  book never holds.")
 
     print(f"\nsaved -> {out_dir / 'tradability.csv'}")
     return 0

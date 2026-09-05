@@ -426,6 +426,71 @@ Their measurement is Bitcoin on Binance at 8-hour frequency, not a cross-section
 is survivorship, and across the cap spectrum the one bracket that survives
 costs (B1 large) is clusterable in only 20 of 114 months.**
 
+## Factor diagnostics (secondary)
+
+Labelled secondary because it is not the strategy question. Two things worth
+knowing about the book that survived, neither of which changes the verdict.
+
+### (a) Is within-cluster mean reversion just reversal plus a size bet?
+
+Each bracket's best point-in-time book, regressed weekly on factors built on the
+academic universe (CoinMarketCap rank 1-1000 with market cap above $1M):
+
+| bracket | arm | weekly alpha | t | R2 | only significant loading |
+|---|---|---|---|---|---|
+| B1 | death | +0.20% | 0.88 | 0.02 | none |
+| B2 | ewma | +0.14% | 0.60 | 0.02 | none |
+| B3 | ewma | **+2.16%** | **2.17** | 0.02 | size, t = -2.70 |
+
+**No.** The B3 book carries a significant weekly alpha of 2.16% against these
+factors, its short-term reversal loading is insignificant (t = 0.56), and the
+factors jointly explain 2% of its variance. The one loading that is significant
+is a negative tilt on size, meaning the book leans toward the larger names
+inside the small-cap bracket, which is the opposite of the "it is just a
+small-cap bet" reading.
+
+Two caveats on how far that goes. An R-squared of 0.02 is low enough that it
+partly reflects these factors being weak on this universe rather than the book
+being exotic; most of them have negative net Sharpes in the table below. And
+B1's and B2's alphas are not distinguishable from zero, which is what their
+near-zero Sharpes already said.
+
+### (b) How much of the crypto factor zoo is survivorship?
+
+Twenty-three factors, three universes differing only in what they can see,
+weekly quintile spreads, value-weighted, net of 50 bps, 2016-2025. The largest
+survivorship differences:
+
+| factor | point-in-time | survivor-only | snapshot | PIT minus survivor | t |
+|---|---|---|---|---|---|
+| size | -0.76 | +0.17 | +0.40 | **-0.93** | -3.01 |
+| turning_points | -1.58 | -1.12 | -0.77 | -0.45 | |
+| reversal_1w | -1.82 | -1.51 | -0.86 | -0.31 | |
+| high_52w | +0.32 | -0.02 | -0.37 | +0.34 | 2.14 |
+| mom_2w | +0.66 | +0.60 | +0.50 | +0.07 | |
+
+Full table: `stat_arb/reporting/brackets/factor_table_three_universes.csv`.
+
+**Romano-Wolf across all 23 factors, two-sided, family-wise error rate 5%:
+nothing is significant.** Size has the largest difference by far and a
+t-statistic of -3.01, which would clear any single-factor threshold, but its
+adjusted p-value is 0.107 once the other 22 tests are accounted for. Reporting
+it as a finding would be exactly the error the procedure exists to prevent.
+
+That is a real result, and it lines up with the rest of this repository rather
+than contradicting it. Survivorship at the **universe** level is small (the
+existing measurement puts it at 4.56% equal-weighted, 2.11% value-weighted).
+Survivorship at the **factor** level is, on this construction, not detectable at
+all. Survivorship at the **strategy** level is worth +0.97 Sharpe on B3. The
+reason is the same each time: a value-weighted quintile spread does not
+systematically overweight the tokens that are about to die, and a
+mean-reversion book does, because dying tokens are exactly what a
+mean-reversion signal wants to buy.
+
+The direction of the size result is worth noting even though it fails the
+correction: the size factor is the one that goes long the small names, which are
+the ones that die, so it is where a survivorship effect should show up first.
+
 ## Repository layout
 
 - `stat_arb/`: main research package for data loading, graph construction, clustering, signals, backtests, and reporting

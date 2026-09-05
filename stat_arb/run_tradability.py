@@ -203,13 +203,23 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"\n=== tradability by bracket (point-in-time, band {BEST_BAND:.0%}, "
           f"rebalance {BEST_FREQ}d, net 50bps) ===")
-    print("  bracket  subset           members  gross    net  after funding  breakeven")
+    print("  bracket  subset           members  gross    net  after funding  breakeven  funding cov")
     for _, r in out.iterrows():
         af = ("-" if not np.isfinite(r["net_sharpe_after_funding"])
               else f"{r['net_sharpe_after_funding']:.2f}")
+        cov = ("-" if not np.isfinite(r["funding_coverage"])
+               else f"{100 * r['funding_coverage']:.0f}%")
         print(f"  {r['bracket']:<7s}  {r['subset']:<15s} {r['avg_members']:7.0f} "
               f"{r['gross_sharpe']:6.2f} {r['net_sharpe']:6.2f} {af:>13s} "
-              f"{r['breakeven_bps']:10.0f}")
+              f"{r['breakeven_bps']:10.0f} {cov:>12s}")
+
+    print("\n  FUNDING COVERAGE IS PARTIAL, so the after-funding column is a LOWER")
+    print("  BOUND on the cost, not a full accounting. Two reasons: the Binance")
+    print("  archive's funding history starts in 2020 while the panel starts in")
+    print("  2016, and only Binance funding was pulled, so a token shortable only")
+    print("  on Hyperliquid, dYdX or Deribit contributes zero rather than its own")
+    print("  rate. The covered share is the fraction of the bracket's return")
+    print("  columns carrying a funding series.")
 
     print(f"\nsaved -> {out_dir / 'tradability.csv'}")
     return 0

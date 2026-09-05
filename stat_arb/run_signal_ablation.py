@@ -53,7 +53,18 @@ from stat_arb.run_residualization_ablation import (  # noqa: E402
 
 # The reference each bracket residualizes against, from the Step 1 ablation.
 BEST_REFERENCE = {"B0": "btc", "B1": "eth", "B2": "vw_market", "B3": "eth"}
-DEATH_PROB_CUTOFF = 0.80
+
+# Share of the cross-section the death filter refuses to go long, each day.
+#
+# An absolute probability cutoff does not work here. The classifier is fitted
+# with class_weight="balanced" on a label whose base rate is about 1.3%, so its
+# scores centre on 0.50 by construction: the median out-of-sample probability is
+# 0.497 and only 0.41% of them ever exceed 0.80. A 0.80 cutoff gated so few
+# names that the filtered book was identical to the unfiltered one in every
+# bracket, which reads as "death is not forecastable" when it actually means
+# "the gate never fired". Ranking within each day and refusing the worst decile
+# is scale-free and does what the arm is supposed to test.
+DEATH_WORST_FRACTION = 0.10
 
 
 class EWMAClusterDeviation(ClusterDeviationStrategy):
@@ -82,8 +93,11 @@ class EWMAClusterDeviation(ClusterDeviationStrategy):
 
 
 def make_death_filter(death_probs: pd.DataFrame, cols_to_id: dict,
-                      cutoff: float = DEATH_PROB_CUTOFF):
-    """Zero the LONG leg of names the classifier scores above `cutoff`.
+                      worst_fraction: float = DEATH_WORST_FRACTION):
+    """Zero the LONG leg of the `worst_fraction` most death-prone names.
+
+    Ranked within each rebalance date rather than against an absolute
+    probability, for the reason given at `DEATH_WORST_FRACTION`.
 
     Longs only. The short leg is left alone deliberately: a token about to die
     is a fine thing to be short, and gating both legs would confuse "avoid the
@@ -98,10 +112,14 @@ def make_death_filter(death_probs: pd.DataFrame, cols_to_id: dict,
         idx = wide.index[wide.index <= dates[0]]
         if len(idx) == 0:
             return weights
-        latest = wide.loc[idx[-1]]
-        risky = [c for c in weights.columns
-                 if cols_to_id.get(c) in latest.index
-                 and float(latest.get(cols_to_id[c], 0.0)) >= cutoff]
+        latest = pd.to_numeric(wide.loc[idx[-1]], errors="coerce").dropna()
+        held = {c: cols_to_id[c] for c in weights.columns
+                if cols_to_id.get(c) in latest.index}
+        if len(held) < 10:
+            return weights
+        scores = latest[list(held.values())]
+        cutoff = scores.quantile(1.0 - float(worst_fraction))
+        risky = [c for c, cid in held.items() if float(latest[cid]) >= cutoff]
         if not risky:
             return weights
         out = weights.copy()
@@ -226,7 +244,11 @@ def main(argv: list[str] | None = None) -> int:
     for r in rows:
         family = [x for x in rows if x["bracket"] == r["bracket"]
                   and x["treatment"] == r["treatment"]]
-        trial_sharpes = [float(x["net_sharpe"]) for x in family]
+        # DSR wants PER-PERIOD Sharpes, and net_sharpe is annualised. Passing
+        # the annualised figures inflates the cross-trial variance by 365 and
+        # drives the deflated Sharpe to exactly zero for every arm, which is
+        # what the first run reported.
+        trial_sharpes = [float(x["net_sharpe"]) / np.sqrt(365.0) for x in family]
         try:
             r["dsr"] = float(deflated_sharpe_ratio(
                 r.pop("net_series"), n_trials=len(family),

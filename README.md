@@ -72,6 +72,67 @@ leg coexist, and it is thin for four fifths of the sample.
 **The clustering and execution methodology is the contribution. The Sharpe is
 survivorship, and the one bracket that survives is too thin to hold it.**
 
+## Clustering methods compared, and a dumb baseline that wins
+
+Twelve methods, three brackets, two survivorship treatments, k selected inside
+each walk-forward window by signflip parallel analysis, everything else held
+fixed. Net Sharpe at 50 bps on the point-in-time universe:
+
+| method | B1 | B2 | B3 | note |
+|---|---|---|---|---|
+| **PCA-kmeans** | -0.82 | -0.49 | **+0.82** | baseline, ignores signs entirely |
+| SPONGEsym | **+0.35** | -0.47 | -0.73 | corrected in this work |
+| PowerMean p=1 | +0.33 | -0.56 | -0.61 | Mercado et al. ICML 2019 |
+| BNC | +0.23 | -0.13 | -0.61 | corrected in this work |
+| PowerMean p=0 | +0.15 | -0.66 | -1.16 | |
+| SPONGE | -0.10 | -0.23 | -0.48 | the incumbent |
+| SignedSpectral | -0.11 | -0.44 | -0.40 | |
+| RegSPONGE | -0.34 | *+0.34* | -1.01 | *degenerate, see below* |
+| RegSignedSpectral | -0.34 | *+0.08* | -0.97 | *degenerate, see below* |
+| Pivot | -0.37 | -1.17 | -0.68 | infers k: 2.3, 14.8, 49.1 |
+| Hierarchical | -0.46 | -1.10 | -1.24 | baseline, no signs |
+| PowerMean p=-10 | -0.66 | -0.62 | -1.43 | |
+
+Full table with eigengap, Calinski-Harabasz, Davies-Bouldin, cluster stability
+and both survivorship treatments:
+`stat_arb/reporting/brackets/clustering_sweep.csv`.
+
+**The two apparent winners on B2 are not clustering at all.** RegSPONGE and
+RegSignedSpectral select k = 1.25 on average there, so in most windows they find
+a single cluster, the noisy-cluster drop removes it, and the book holds nothing.
+Their turnover is 0.0135 against roughly 0.048 for every other method, a factor
+of 3.6, and on B1 it is 0.0032 against 0.048, a factor of 15. A nearly flat
+series with a small positive drift reports a positive Sharpe. This is not
+evidence that regularization helps; it is a book that mostly declines to trade,
+and it is marked as such rather than ranked first.
+
+**The dumb baseline wins B3 outright, and it is not degenerate.** k-means on the
+leading eigenvectors, which throws the sign structure away entirely, is the only
+method with a positive net Sharpe on B3 point-in-time: +0.82 against -0.40 for
+the best signed method. Its turnover is 0.047, in line with everything else, and
+its cluster stability of 0.700 is the highest in the bracket. It trades as much
+as the others and does better.
+
+That is the honesty check firing exactly as it was built to. The signed spectral
+machinery is not what produces the result on the bracket where the original
+hypothesis lives. On B1, where the signed methods do win, the margin is
+SPONGEsym at +0.35 over PCA-kmeans at -0.82, so the machinery earns its place
+there and only there.
+
+**The two corrected clusterers are first and third on B1.** SPONGEsym and BNC,
+both of which were measuring something other than what they claimed before this
+work, are the best and third-best methods on the one bracket that supports a
+tradable book. Neither would have appeared in the ranking at all if the
+implementations had been trusted rather than tested.
+
+Two further observations. Pivot, the only method not told k, infers 2.3 clusters
+on B1, 14.8 on B2 and 49.1 on B3, so the cross-section fragments as it gets
+larger rather than resolving into a stable handful of groups. And the report's
+own criteria disagree with the criterion that matters: on B3 point-in-time,
+RegSignedSpectral has the best Calinski-Harabasz score in the bracket (854
+against PCA-kmeans's 147) and the second-worst net Sharpe. A partition-quality
+score rewards a tidy partition, not a tradable one.
+
 ## What "the market" is differs by bracket, and PCA is not it
 
 The original report residualized against ETH. The rebuild residualized against a

@@ -120,7 +120,7 @@ def load_inputs(panel_path: Path, data_dir: Path, start: pd.Timestamp,
 
 
 def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index,
-            clusterer=None):
+            clusterer=None, **config_kwargs):
     """One ablation arm on one bracket. Returns stats plus the diagnostics.
 
     `clusterer` defaults to the published SPONGE k=3 path. The clustering-method
@@ -128,6 +128,11 @@ def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index,
     the method: the residualization ablation and the method comparison then run
     through exactly the same universe construction, liquidity filter and
     backtest, and differ only in the thing each is varying.
+
+    Any further `config_kwargs` go straight to `run_phase3_config`, which is how
+    the signal ablation supplies `strategy_factory`, `cluster_selector` and
+    `weight_filter`. Passing them through rather than enumerating them keeps
+    this function from having to change every time a later step adds a hook.
     """
     returns, _ = D.excess_log_returns(close, refs[reference], table)
     cols = [c for c in member_mask.columns if c in returns.columns]
@@ -157,7 +162,7 @@ def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index,
     result = run_phase3_config(returns, mask, weight_band=BEST_BAND,
                                trade_frequency_days=BEST_FREQ,
                                n_pca_components=n_pca, diagnostics=diagnostics,
-                               clusterer=clusterer)
+                               clusterer=clusterer, **config_kwargs)
     if result is None:
         return None
 

@@ -61,6 +61,17 @@ def _cache_path(raw_dir: Path, kind: str, key: str) -> Path:
     return d / f"{key}.parquet"
 
 
+def _history_ns(start: pd.Timestamp, end: pd.Timestamp) -> str:
+    """Cache namespace for a history pull.
+
+    The history endpoint returns only what was asked for, so a file cached for a
+    2-year window is not a valid cache entry for a 12-year one. Namespacing on
+    the window makes a wider pull refetch instead of silently reusing a series
+    that stops short.
+    """
+    return f"history_{pd.Timestamp(start).date()}_{pd.Timestamp(end).date()}"
+
+
 def _cached(path: Path, fetch, force: bool = False) -> pd.DataFrame:
     """Read `path` if present, else fetch and write it. Makes the pull resumable."""
     if path.exists() and not force:
@@ -78,7 +89,9 @@ def pull_snapshots(raw_dir: Path, start: pd.Timestamp, end: pd.Timestamp,
     frames = []
     for day in dates:
         key = day.strftime("%Y-%m-%d")
-        path = _cache_path(raw_dir, "snapshots", key)
+        # depth is part of the key: a snapshot cached at depth 500 is not a
+        # valid cache hit for a depth-2000 pull.
+        path = _cache_path(raw_dir, "snapshots", f"{key}_d{depth}")
         frames.append(_cached(path, lambda d=key: cmc_pit.fetch_listing_snapshot(d, depth), force))
         print(f"  snapshot {key}: {len(frames[-1])} ranks", flush=True)
     return pd.concat(frames, ignore_index=True)
@@ -100,8 +113,9 @@ def pull_histories(raw_dir: Path, cmc_ids: list[int], start: pd.Timestamp,
     """Daily OHLCV for every id, cached one file per id so this resumes."""
     out: dict[int, pd.DataFrame] = {}
     todo = []
+    ns = _history_ns(start, end)
     for cmc_id in cmc_ids:
-        path = _cache_path(raw_dir, "history", str(int(cmc_id)))
+        path = _cache_path(raw_dir, ns, str(int(cmc_id)))
         if path.exists() and not force:
             out[int(cmc_id)] = pd.read_parquet(path)
         else:
@@ -131,7 +145,7 @@ def pull_histories(raw_dir: Path, cmc_ids: list[int], start: pd.Timestamp,
                     columns=["date", "open", "high", "low", "close",
                              "volume_usd", "market_cap_usd"])
             done += 1
-            if done % 50 == 0:
+            if done % 200 == 0:
                 print(f"    {done}/{len(todo)} fetched", flush=True)
     return out
 
@@ -146,8 +160,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--raw-dir", default=None, help="raw pull cache (gitignored)")
     ap.add_argument("--out-dir", default=None, help="where derived tables are written")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--sleep", type=float, default=None,
+                    help="polite pause in seconds between CMC requests "
+                         f"(default {cmc_pit.get_pause()})")
     ap.add_argument("--force", action="store_true", help="ignore the raw cache")
     args = ap.parse_args(argv)
+
+    if args.sleep is not None:
+        cmc_pit.set_pause(args.sleep)
 
     root = Path(__file__).resolve().parent.parent
     raw_dir = Path(args.raw_dir) if args.raw_dir else root / "data" / "raw_cmc"

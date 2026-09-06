@@ -12,9 +12,27 @@ class BNCClustering:
     """
     Balance Normalized Cut clustering for signed graphs.
 
-    Solves: (A+ - A-) v = lambda D_tot v
+    Chiang, Whang and Dhillon, "Scalable Clustering of Signed Networks Using
+    Balance Normalized Cut", CIKM 2012.
 
-    where D_tot = D+ + D- is the total degree matrix.
+    The objective is to cut few positive edges and many negative ones, and its
+    generalized eigenproblem is
+
+        (D+ - A+ + A-) v = lambda (D+ + D-) v
+
+    taking the SMALLEST eigenvalues. The numerator is the positive Laplacian
+    plus the negative adjacency, ``L+ + A-``: the ``L+`` term penalises cutting
+    a positive edge and the ``+A-`` term rewards cutting a negative one. The
+    denominator is the total degree, which is what normalises the cut.
+
+    This was previously implemented as ``eigh(A+ - A-, D_tot)`` taking the
+    smallest eigenvalues, which drops the ``D+`` term and, because a diagonal
+    degree term only shifts the spectrum, selects from the opposite end of it.
+    On planted signed blocks that both SPONGE and the corrected form recover
+    exactly (adjusted Rand index 1.000), the old form scored -0.02, which is
+    worse than assigning labels at random. `run_phase2.py` uses this class, so
+    the "BNC" column of the published 16-configuration sweep was measuring an
+    inverted method rather than Balance Normalized Cut.
     """
 
     def __init__(
@@ -63,13 +81,15 @@ class BNCClustering:
         D_minus = np.diag(A_minus.sum(axis=1))
         D_tot = D_plus + D_minus
 
-        # BNC matrix: L_bnc = A+ - A-
-        L_bnc = A_plus - A_minus
+        # BNC matrix: L+ + A- = D+ - A+ + A-
+        L_bnc = D_plus - A_plus + A_minus
 
-        # Add regularization
+        # Add regularization: an isolated node has zero total degree and would
+        # otherwise make the pencil singular
         D_tot_reg = D_tot + 1e-6 * np.eye(len(D_tot))
 
-        # Solve generalized eigenproblem
+        # Solve generalized eigenproblem; eigh returns ascending eigenvalues and
+        # BNC wants the smallest, so the leading columns are the right ones
         self.eigenvalues_, self.eigenvectors_ = eigh(L_bnc, D_tot_reg)
 
         # Build embedding from first k eigenvectors

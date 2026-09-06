@@ -114,9 +114,28 @@ class SPONGEClustering:
         n_clusters: Optional[int] = None,
     ) -> 'SPONGEClustering':
         """
-        Fit symmetric SPONGE variant (SPONGEsym).
+        Fit the symmetric SPONGE variant, SPONGEsym.
 
-        Uses P = M2^{-1/2} M1 M2^{-1/2} for symmetric eigenproblem.
+        Cucuringu, Davies, Glielmo and Tyagi (AISTATS 2019) define SPONGEsym on
+        the symmetrically NORMALIZED signed Laplacians
+
+            L+_sym = I - (D+)^{-1/2} A+ (D+)^{-1/2}
+            L-_sym = I - (D-)^{-1/2} A- (D-)^{-1/2}
+
+        solving (L+_sym + tau- I) v = lambda (L-_sym + tau+ I) v for the
+        smallest eigenvalues. Normalising by degree is the whole point of the
+        variant: it stops high-degree nodes dominating the embedding, which is
+        what makes it behave differently from plain SPONGE on a graph with an
+        uneven degree distribution.
+
+        This previously whitened the UNNORMALIZED SPONGE pencil, computing
+        M2^{-1/2} M1 M2^{-1/2} from the same M1 and M2 that `fit` uses. That is
+        a similarity transform of the same generalized eigenproblem, so it has
+        the same eigenvalues and returns the same clustering: measured on
+        planted blocks, the two paths gave identical labels and identical
+        eigenvalues to machine precision. The published comparison's "SPONGEsym"
+        column was therefore plain SPONGE run a second time, not a second
+        method.
         """
         if n_clusters is not None:
             self.n_clusters = n_clusters
@@ -128,32 +147,27 @@ class SPONGEClustering:
         A_plus = np.clip(adjacency, 0, None)
         A_minus = np.clip(-adjacency, 0, None)
 
-        # Degree matrices
-        D_plus = np.diag(A_plus.sum(axis=1))
-        D_minus = np.diag(A_minus.sum(axis=1))
+        # Degree vectors. An isolated node in either layer has zero degree, so
+        # the inverse square root is floored rather than allowed to divide by 0.
+        d_plus = np.maximum(A_plus.sum(axis=1), 1e-12)
+        d_minus = np.maximum(A_minus.sum(axis=1), 1e-12)
+        inv_sqrt_plus = 1.0 / np.sqrt(d_plus)
+        inv_sqrt_minus = 1.0 / np.sqrt(d_minus)
 
-        # Laplacians
-        L_plus = D_plus - A_plus
-        L_minus = D_minus - A_minus
+        n = len(A_plus)
+        eye = np.eye(n)
 
-        # SPONGE matrices
-        M1 = L_plus + self.tau_minus * D_minus
-        M2 = L_minus + self.tau_plus * D_plus
+        # Symmetrically normalized signed Laplacians
+        L_plus_sym = eye - (inv_sqrt_plus[:, None] * A_plus * inv_sqrt_plus[None, :])
+        L_minus_sym = eye - (inv_sqrt_minus[:, None] * A_minus * inv_sqrt_minus[None, :])
 
-        # Compute M2^{-1/2}
-        eigvals_M2, eigvecs_M2 = eigh(M2)
-        eigvals_M2 = np.maximum(eigvals_M2, 1e-8)  # Regularize
-        inv_sqrt_vals = 1.0 / np.sqrt(eigvals_M2)
-        M2_inv_sqrt = eigvecs_M2 @ np.diag(inv_sqrt_vals) @ eigvecs_M2.T
+        # SPONGEsym pencil: the regularisers are identity, not degree matrices,
+        # because the Laplacians are already degree-normalized
+        M1 = L_plus_sym + self.tau_minus * eye
+        M2 = L_minus_sym + self.tau_plus * eye
+        M2 = M2 + 1e-6 * eye
 
-        # Symmetric operator
-        P = M2_inv_sqrt @ M1 @ M2_inv_sqrt
-
-        # Eigendecompose P
-        self.eigenvalues_, eigvecs_P = eigh(P)
-
-        # Transform back: v = M2^{-1/2} @ u
-        self.eigenvectors_ = M2_inv_sqrt @ eigvecs_P
+        self.eigenvalues_, self.eigenvectors_ = eigh(M1, M2)
 
         # Build embedding
         U = self.eigenvectors_[:, :self.n_clusters]

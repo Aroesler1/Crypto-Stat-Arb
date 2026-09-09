@@ -2,7 +2,7 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, "review/**"]
   pull_request:
   workflow_dispatch:
 
@@ -27,3 +27,9 @@ jobs:
       # a secret was configured.
       - name: Run tests
         run: python -m pytest tests -q
+
+      - name: Verify committed availability tables
+        run: python stat_arb/run_availability_audit.py --check
+
+      - name: Verify capital-accounting tables
+        run: python stat_arb/run_accounting_audit.py --check

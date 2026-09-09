@@ -53,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from stat_arb.data import pit_universe as P  # noqa: E402
 from stat_arb.data.loader import EXCLUDED_TOKENS  # noqa: E402
 from stat_arb.data.universe import UniverseManager  # noqa: E402
+from stat_arb.backtest.holdings import simple_from_excess_log
 from stat_arb.run_phase3 import run_phase3_config  # noqa: E402
 from stat_arb.build_pit_universe import (  # noqa: E402
     DEFAULT_END, DEFAULT_RANK_HI, DEFAULT_RANK_LO, DEFAULT_START, ETH_CMC_ID,
@@ -208,7 +209,9 @@ def run_tier(returns, prices, volumes, eth_data, band_mask, min_volume_usd,
     members = float(mask.sum(axis=1).mean()) if not mask.empty else 0.0
 
     result = run_phase3_config(returns, mask, weight_band=BEST_BAND,
-                               trade_frequency_days=BEST_FREQ)
+                               trade_frequency_days=BEST_FREQ,
+                               asset_returns=simple_from_excess_log(returns, eth_data["close"]),
+                               missing_returns="stale_mark")
     if result is None:
         return None
 
@@ -322,7 +325,7 @@ def main(argv: list[str] | None = None) -> int:
     out = pd.DataFrame(rows)
     out_dir = root / "stat_arb" / "reporting" / "robustness"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out.to_csv(out_dir / "pit_vs_survivor.csv", index=False)
+    out.to_csv(out_dir / "pit_vs_survivor_corrected.csv", index=False)
 
     for convention in out["convention"].unique():
         sub = out[out["convention"] == convention]

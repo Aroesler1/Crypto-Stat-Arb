@@ -144,8 +144,23 @@ cross-section stay in the table marked "no data" with the reason, rather than
 being computed on whatever subset happens to have coverage and reported as if
 it were the whole universe.
 
+## Derived availability audit
+
+`stat_arb/run_availability_audit.py --check` reads only the already committed
+bracket membership, universe, assignments, member counts, perpetual snapshot
+and funding panels. Its three aggregate outputs in `stat_arb/reporting/brackets/`
+are `availability_summary.csv`, `availability_by_year.csv` and
+`headline_universe_reproduction.csv`. They contain counts and coverage ratios,
+not newly fetched observations. The membership audit spans 2016-01-01 through
+2025-06-30. A funding observation is archive support, not a listing or
+publication timestamp. No new source or WRDS dependency was introduced.
+
 ## Licence and retention
 
 No vendor licence applies.
 
 The survivorship limitation this file used to describe as binding, "the universe is a CoinMarketCap snapshot and excludes dead tokens", is now measured rather than assumed. It is worth a net Sharpe of 2.02 against -0.14. See the README, which leads with it.
+
+## Capital-return audit outputs
+
+`stat_arb/reporting/brackets/accounting_summary.csv` and `accounting_daily.csv` are derived portfolio-level outputs from the existing daily panel. No new source was used. The six fixed baseline/EWMA replications use simple asset returns recovered before reference subtraction, enforce the declared eligibility floor and replay drifting holdings. Missing held prices use an explicitly labelled stale-mark diagnostic; affected exposure is reported. Insolvent books stop and have no full-period Sharpe. Historical log-score tables are retained separately.

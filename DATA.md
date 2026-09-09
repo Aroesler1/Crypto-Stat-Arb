@@ -2,7 +2,10 @@
 
 **Primary source:** public cryptocurrency market data (daily OHLCV, volumes, and an ETH reference series) collected from public APIs.
 
-This repository has **no licensed-vendor dependency**. Everything here can be redistributed, reused, and retained without restriction, which is why the input datasets are committed directly.
+This repository has no WRDS dependency. The MIT licence covers the code;
+each data source retains its own terms. In particular, Coin Metrics community
+data and the series derived from it are subject to CC BY-NC 4.0, as detailed
+below. Public availability does not imply unrestricted reuse.
 
 ## What is committed
 
@@ -157,9 +160,14 @@ publication timestamp. No new source or WRDS dependency was introduced.
 
 ## Licence and retention
 
-No vendor licence applies.
+Source-specific terms apply to retained and redistributed data, including the
+Coin Metrics attribution and non-commercial restrictions above. The code's MIT
+licence does not override those terms.
 
-The survivorship limitation this file used to describe as binding, "the universe is a CoinMarketCap snapshot and excludes dead tokens", is now measured rather than assumed. It is worth a net Sharpe of 2.02 against -0.14. See the README, which leads with it.
+The survivorship comparison originally reported log-score Sharpes of 2.02
+against -0.14. Those historical scores are retained for comparison, but are
+retired as portfolio performance claims. The README and capital-return audit
+below explain the corrected holdings accounting and insolvency results.
 
 ## Capital-return audit outputs
 

@@ -790,4 +790,5 @@ Results were regenerated after a signal-integrity pass. The material fixes, each
 
 ## License
 
-This project is distributed under the MIT License
+The code is distributed under the MIT License. Data retains its source-specific
+terms, including Coin Metrics CC BY-NC 4.0. See [DATA.md](DATA.md).

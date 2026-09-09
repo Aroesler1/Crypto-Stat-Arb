@@ -607,7 +607,7 @@ the ones that die, so it is where a survivorship effect should show up first.
 python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install numpy pandas scipy scikit-learn matplotlib statsmodels pyarrow pytest
+pip install -r requirements.txt
 ```
 
 Run the test suite:

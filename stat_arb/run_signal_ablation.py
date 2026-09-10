@@ -19,7 +19,8 @@ The death filter is the one that should matter most on a point-in-time
 universe. A mean-reversion book buys losers, and on this panel a meaningful
 share of the losers are about to be delisted. If death is forecastable even
 weakly, declining to buy the worst-scoring names is the cheapest available fix.
-DSR treats the seven arms as the multiple-testing pool.
+DSR treats the eight arms as a conditional pool. Earlier reference, clustering
+and execution choices are additional trials and are not corrected by that DSR.
 """
 
 from __future__ import annotations
@@ -269,6 +270,8 @@ def arm_kwargs(name: str, death_filter=None) -> dict:
         overlay = ClusterMomentumOverlay(momentum_window=28, top_frac=0.5)
         return {"cluster_selector": overlay.clusters_to_trade}
     if name == "death":
+        if death_filter is None:
+            raise ValueError("death arm requires a fitted, nonempty death filter")
         return {"weight_filter": death_filter}
     raise ValueError(name)
 
@@ -319,8 +322,8 @@ def main(argv: list[str] | None = None) -> int:
         print(coefs.to_string(index=False))
         out_dir = root / "stat_arb" / "reporting" / "brackets"
         out_dir.mkdir(parents=True, exist_ok=True)
-        metrics.to_csv(out_dir / "death_classifier_auc.csv", index=False)
-        coefs.to_csv(out_dir / "death_classifier_coefficients.csv", index=False)
+        metrics.to_csv(out_dir / "death_classifier_auc_corrected.csv", index=False)
+        coefs.to_csv(out_dir / "death_classifier_coefficients_corrected.csv", index=False)
         probs = DM.death_probabilities(features)
         cols_to_id = {f"{int(c)}_returns": int(c) for c in close.columns}
         death_filter = make_death_filter(probs, cols_to_id)
@@ -420,7 +423,7 @@ def main(argv: list[str] | None = None) -> int:
     out = pd.DataFrame(rows)
     out_dir = root / "stat_arb" / "reporting" / "brackets"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out.to_csv(out_dir / "signal_ablation.csv", index=False)
+    out.to_csv(out_dir / "signal_ablation_corrected.csv", index=False)
 
     print(f"\n=== signal extensions (band {BEST_BAND:.0%}, rebalance {BEST_FREQ}d, "
           f"net 50bps; reference per bracket from Step 1) ===")
@@ -447,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
         front = ["bracket", "treatment", "arm", "role", "halflife", "is_default",
                  "net_sharpe", "sharpe_ex_best", "best_days_share", "turnover", "n_days"]
         rob = rob[[c for c in front if c in rob.columns] + year_cols]
-        rob.to_csv(out_dir / "ewma_robustness.csv", index=False)
+        rob.to_csv(out_dir / "ewma_robustness_corrected.csv", index=False)
 
         print(f"\n=== {ROBUSTNESS_BRACKET} robustness "
               f"(net Sharpe, and what it survives) ===")

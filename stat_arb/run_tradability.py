@@ -1,28 +1,9 @@
-"""Step 4: the tradability verdict, one row per bracket.
+"""Static perpetual-symbol subset audit, not historical executable returns.
 
-Everything up to here has asked whether within-cluster mean reversion exists.
-This asks whether it can be traded, which on this universe is a different
-question with a different answer.
-
-Two restrictions are applied on top of the point-in-time bracket:
-
-1. **The short leg must exist.** A market-neutral book has to borrow, and a
-   token with no perpetual market cannot be shorted at any price. Membership is
-   restricted to names with a listed perpetual on Binance, Hyperliquid, dYdX v4
-   or Deribit. This is not a cost adjustment, it is a constraint on what the
-   universe can contain at all.
-2. **The short leg must be paid for.** Measured 8-hourly Binance funding is
-   applied to every position, summed daily. Sign convention: a positive funding
-   rate means longs pay shorts, so the funding contribution to the book's return
-   is ``-(weights * funding).sum(axis=1)``: a long position pays it and a short
-   earns it. Tokens with no funding series contribute zero rather than being
-   dropped, and the share of the book that is covered is reported so a reader
-   can see how much of the cost is measured rather than assumed.
-
-The expected shape, which the Step 0 perpetual-coverage table already implies:
-large caps are shortable but have little within-cluster dispersion, small caps
-have the dispersion but no shorts. The verdict table is where that either shows
-up or does not.
+A later venue snapshot has no historical listing dates and does not establish
+borrow availability. Funding is measured only where a dated rate is present;
+missing signed funding set to zero is neither a cost nor a performance bound.
+Daily funding uses opening effective holdings as an intraday-notional proxy.
 """
 
 from __future__ import annotations
@@ -47,7 +28,8 @@ from stat_arb.run_phase3 import annualized_sharpe  # noqa: E402
 from stat_arb.run_residualization_ablation import (  # noqa: E402
     BEST_BAND, BEST_FREQ, load_inputs, run_arm,
 )
-from stat_arb.run_signal_ablation import BEST_REFERENCE, arm_kwargs  # noqa: E402
+from stat_arb.run_signal_ablation import BEST_REFERENCE, arm_kwargs, make_death_filter
+from stat_arb.data import death_model as DM  # noqa: E402
 
 PERIODS_PER_YEAR = 365
 
@@ -105,7 +87,7 @@ def funding_coverage(weights: pd.DataFrame, funding: pd.DataFrame,
         return float("nan"), float("nan")
     by_column = len(covered) / max(len(weights.columns), 1)
 
-    w = weights.shift(1).abs().fillna(0.0)
+    w = weights.abs().fillna(0.0)
     f = funding.reindex(index=w.index, columns=w.columns)
     present = f.notna()
     total = float(w.to_numpy().sum())
@@ -118,11 +100,11 @@ def apply_funding(weights: pd.DataFrame, funding: pd.DataFrame) -> pd.Series:
     """Daily funding contribution to the book's return.
 
     Positive funding means longs pay shorts, so the book's P&L from funding is
-    the negative of its weighted exposure. Weights are lagged one day: funding
-    accrues on the position actually held, not on the one being traded into.
+    the negative of its weighted exposure. These are already-effective positions
+    entering the dated return; applying another lag charges the wrong book.
     """
     f = funding.reindex(index=weights.index, columns=weights.columns).fillna(0.0)
-    return -(weights.shift(1).fillna(0.0) * f).sum(axis=1)
+    return -(weights.fillna(0.0) * f).sum(axis=1)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -150,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
                else pd.DataFrame(columns=["date", "base", "funding_rate"]))
     if funding.empty:
         print("WARNING: no funding panel; run stat_arb/build_funding_panel.py. "
-              "Funding will be reported as zero and the verdict understates cost.")
+              "Observed funding will be zero; the unmeasured signed contribution is unknown.")
 
     start, end = pd.Timestamp(args.start), pd.Timestamp(args.end)
     print(f"loading panels {start.date()}..{end.date()} ...", flush=True)
@@ -170,7 +152,17 @@ def main(argv: list[str] | None = None) -> int:
             best_by_bracket[bracket] = g.loc[g["net_sharpe"].idxmax(), "arm"]
         print(f"  best Step 3 arm per bracket: {best_by_bracket}")
 
-    engine = BacktestEngine()
+    selected = {best_arm or best_by_bracket.get(b, "baseline")
+                for b in args.brackets.split(",")}
+    death_filter = None
+    if "death" in selected:
+        raw = pd.read_parquet(panel_path)
+        raw["date"] = pd.to_datetime(raw["date"])
+        raw = raw[raw["cmc_id"].isin(set(table["cmc_id"].astype(int)))]
+        features = DM.build_features(raw, table, sample_every=7)
+        probs = DM.death_probabilities(features)
+        death_filter = make_death_filter(probs, {
+            f"{int(c)}_returns": int(c) for c in close.columns})
     rows = []
     for bracket in [b.strip() for b in args.brackets.split(",") if b.strip()]:
         ids = sorted({int(c) for c in
@@ -189,37 +181,21 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {bracket} / {label}: empty, skipped")
                 continue
             print(f"  {bracket} / {label} / arm={arm} ...", flush=True)
+            fwide, covered = funding_panel_wide(
+                funding, table, index, [f"{int(c)}_returns" for c in mask.columns])
+            measured_funding = (fwide if label == "shortable only" and not funding.empty else None)
             stats = run_arm(close, volume, table, refs, reference, 0, mask, index,
-                            **arm_kwargs(arm, None))
+                            funding_rates=measured_funding, **arm_kwargs(arm, death_filter))
             if stats is None:
                 print("    produced no positions, skipped")
                 continue
             stats.pop("net_series", None)
             stats.update(bracket=bracket, subset=label, arm=arm, reference=reference,
-                         funding_ann=np.nan, net_sharpe_after_funding=np.nan,
-                         funding_coverage=np.nan,
-                         funding_coverage_exposure=np.nan)
+                         funding_coverage=len(covered) / max(len(mask.columns), 1))
+            for field in ("funding_ann", "net_sharpe_after_funding", "funding_coverage_exposure"):
+                stats.setdefault(field, np.nan)
             rows.append(stats)
 
-        # funding is only meaningful on the subset that can actually be shorted
-        if tradeable.to_numpy().sum() == 0 or funding.empty:
-            continue
-        cols = [f"{int(c)}_returns" for c in tradeable.columns]
-        fwide, covered = funding_panel_wide(funding, table, index, cols)
-        row = next((r for r in rows if r["bracket"] == bracket
-                    and r["subset"] == "shortable only"), None)
-        if row is None or "weights" not in row:
-            continue
-        weights = row.pop("weights")
-        fund_pnl = apply_funding(weights, fwide)
-        net_after = row["net_series_for_funding"] + fund_pnl.reindex(
-            row["net_series_for_funding"].index).fillna(0.0)
-        row["funding_ann"] = float(fund_pnl.mean()) * PERIODS_PER_YEAR
-        row["net_sharpe_after_funding"] = annualized_sharpe(net_after)
-        by_col, by_exp = funding_coverage(weights, fwide, covered)
-        row["funding_coverage"] = by_col
-        row["funding_coverage_exposure"] = by_exp
-        row.pop("net_series_for_funding", None)
 
     if not rows:
         print("no configuration produced a result")
@@ -230,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
                         for r in rows])
     out_dir = root / "stat_arb" / "reporting" / "brackets"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out.to_csv(out_dir / "tradability.csv", index=False)
+    out.to_csv(out_dir / "tradability_corrected.csv", index=False)
 
     print(f"\n=== tradability by bracket (point-in-time, band {BEST_BAND:.0%}, "
           f"rebalance {BEST_FREQ}d, net 50bps) ===")
@@ -255,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     print("  years before any venue listed a perpetual on them, including names the")
     print("  book never holds.")
 
-    print(f"\nsaved -> {out_dir / 'tradability.csv'}")
+    print(f"\nsaved -> {out_dir / 'tradability_corrected.csv'}")
     return 0
 
 

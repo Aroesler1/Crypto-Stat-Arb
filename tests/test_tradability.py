@@ -55,13 +55,13 @@ def test_negative_funding_reverses_both():
 # --- lagging ---------------------------------------------------------------
 
 def test_funding_accrues_on_the_position_already_held():
-    """A position opened today does not pay today's funding."""
+    """Inputs are effective holdings for the dated return, already lagged."""
     w = _weights([[0.0, 0.0], [1.0, 0.0], [1.0, 0.0], [0.0, 0.0], [0.0, 0.0]])
     f = _funding([[0.01, 0.0]] * 5)
     pnl = apply_funding(w, f)
-    assert pnl.iloc[1] == pytest.approx(0.0)     # opened today, pays nothing
+    assert pnl.iloc[1] == pytest.approx(-0.01)   # effective for this day
     assert pnl.iloc[2] == pytest.approx(-0.01)   # held overnight, pays
-    assert pnl.iloc[3] == pytest.approx(-0.01)   # still held at yesterday's close
+    assert pnl.iloc[3] == pytest.approx(0.0)     # no effective exposure
     assert pnl.iloc[4] == pytest.approx(0.0)     # closed
 
 
@@ -121,5 +121,5 @@ def test_coverage_counts_only_days_the_rate_exists():
     f = pd.DataFrame(np.nan, index=DATES, columns=cols)
     f.iloc[3:, 0] = 0.01                 # rate exists for the last two days
     _, by_exp = funding_coverage(w, f, covered=cols)
-    # weights are lagged, so day 0 contributes nothing; of days 1-4, two covered
-    assert by_exp == pytest.approx(0.5)
+    # All five dated effective exposures count; two have observed rates.
+    assert by_exp == pytest.approx(0.4)

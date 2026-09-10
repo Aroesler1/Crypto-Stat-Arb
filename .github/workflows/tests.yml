@@ -2,7 +2,7 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, "review/**"]
   pull_request:
   workflow_dispatch:
 
@@ -19,7 +19,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pytest numpy pandas scipy scikit-learn matplotlib statsmodels pyarrow
+          pip install -r requirements.txt
 
       # The suite is deliberately offline: no test reads a vendor API, a
       # database, or a credential. Anything needing licensed data is exercised
@@ -27,3 +27,9 @@ jobs:
       # a secret was configured.
       - name: Run tests
         run: python -m pytest tests -q
+
+      - name: Verify committed availability tables
+        run: python stat_arb/run_availability_audit.py --check
+
+      - name: Verify capital-accounting tables
+        run: python stat_arb/run_accounting_audit.py --check

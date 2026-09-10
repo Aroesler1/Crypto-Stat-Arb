@@ -135,11 +135,17 @@ def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index,
     this function from having to change every time a later step adds a hook.
     """
     returns, _ = D.excess_log_returns(close, refs[reference], table)
+    # Apply the same cleaned observations and imposed terminal shock, then undo
+    # the reference subtraction for capital P&L. PCA remains signal-only.
+    from stat_arb.backtest.holdings import simple_from_excess_log
+    asset_returns = simple_from_excess_log(returns, refs[reference])
     cols = [c for c in member_mask.columns if c in returns.columns]
     if not cols:
         return None
     returns = returns[cols]
     returns.columns = [f"{int(c)}_returns" for c in cols]
+    asset_returns = asset_returns[cols]
+    asset_returns.columns = returns.columns
 
     prices = close[cols].copy()
     prices.columns = [str(int(c)) for c in cols]
@@ -162,13 +168,14 @@ def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index,
     result = run_phase3_config(returns, mask, weight_band=BEST_BAND,
                                trade_frequency_days=BEST_FREQ,
                                n_pca_components=n_pca, diagnostics=diagnostics,
-                               clusterer=clusterer, **config_kwargs)
+                               clusterer=clusterer, asset_returns=asset_returns,
+                               missing_returns="stale_mark", **config_kwargs)
     if result is None:
         return None
 
     d = pd.DataFrame([{k: v for k, v in x.items() if k not in ("labels", "assets")}
                       for x in diagnostics])
-    return {
+    stats = {
         "avg_members": float(mask.sum(axis=1).mean()),
         "var_removed": float(d["variance_removed"].mean()) if len(d) else np.nan,
         "density": float(d["graph_density"].mean()) if len(d) else np.nan,
@@ -189,6 +196,17 @@ def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index,
         "net_series_for_funding": result["net_50"],
         "weights": result["weights"],
     }
+
+    stats["missing_return_exposure_share"] = float(
+        result["ledger"].missing_return_exposure.sum() /
+        max(result["ledger"].gross_exposure.sum(), 1e-15))
+    if "funded_ledger" in result:
+        funded = result["funded_ledger"]
+        stats.update(funding_ann=float(funded.funding_return.mean()) * 365,
+                     net_sharpe_after_funding=annualized_sharpe(funded.net_return),
+                     funding_coverage_exposure=float(funded.funding_covered_exposure.sum() /
+                         max(funded.gross_exposure.sum(), 1e-15)))
+    return stats
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -247,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     out = pd.DataFrame(rows)
     out_dir = root / "stat_arb" / "reporting" / "brackets"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out.to_csv(out_dir / f"residualization_ablation_{args.treatment}.csv", index=False)
+    out.to_csv(out_dir / f"residualization_ablation_{args.treatment}_corrected.csv", index=False)
 
     print(f"\n=== residualization ablation ({args.treatment}, "
           f"band {BEST_BAND:.0%}, rebalance {BEST_FREQ}d, net 50bps) ===")

@@ -247,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
     out = pd.DataFrame(rows)
     out_dir = root / "stat_arb" / "reporting" / "brackets"
     out_dir.mkdir(parents=True, exist_ok=True)
-    out.to_csv(out_dir / "clustering_sweep.csv", index=False)
+    out.to_csv(out_dir / "clustering_sweep_corrected.csv", index=False)
 
     print(f"\n=== clustering methods by bracket "
           f"(reference {args.reference}, band {BEST_BAND:.0%}, "

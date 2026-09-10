@@ -1,17 +1,49 @@
 # Crypto Stat-Arb
 
+## Capital-accounting correction, 2026-09-08
+
+**Scope:** the same historical ETH-relative universe, with earned returns from 2016-06-30 to 2025-06-30 where a book survives. This is a retrospective repair of fixed configurations, not a new strategy search or unseen evaluation. The original log-score tables below are historical.
+
+The new engine marks dollar holdings with raw simple returns, finances trades through cash, charges actual drift rebalancing and applies funding to already-effective positions. It refuses silent universe expansion and enforces 30 eligible names. Missing held returns raise by default; the historical-panel replication explicitly uses a stale-mark proxy and reports the affected exposure. That assumption and historical shortability still prevent an executable-performance claim.
+
+| bracket / fixed signal | historical log-score Sharpe | corrected 50 bp capital result | missing-return exposure share |
+|---|---:|---:|---:|
+| B1 baseline | 0.395 | 0.078 Sharpe | 0.012% |
+| B1 EWMA | -0.032 | 0.428 Sharpe | 0.000% |
+| B2 baseline | -0.238 | 0.539 Sharpe | 4.827% |
+| B2 EWMA | 0.436 | -0.232 Sharpe | 2.196% |
+| B3 baseline | -0.423 | insolvent on 2017-12-08 | not a full-period estimate |
+| B3 EWMA | 1.452 | insolvent on 2020-03-14 | not a full-period estimate |
+
+The two insolvencies differ in kind. The B3 baseline's, on 2017-12-08, is driven by a single near-zero-volume token: Virtacoin (cmc_id 520, VTA), whose quoted price went from $0.000002 to $0.000065 and back to $0.000003 between 2017-12-04 and 2017-12-07 on under $900 of daily volume, before its delisting in February 2020. The B3 EWMA book's, on 2020-03-14, follows the 2020-03-12 crash, when the median B3 member fell by about 38% in a day. The ledger treats both the same way, and it should: a book that one illiquid quote can bankrupt is not investable either.
+
+Sources: [six-row comparison](stat_arb/reporting/brackets/accounting_summary.csv) and [daily portfolio returns](stat_arb/reporting/brackets/accounting_daily.csv). The capital model permits leveraged shorts and stops at nonpositive equity; it does not simulate a venue's liquidation system. No loss was clipped, book restarted or risk rule retuned after the failure.
+
+```bash
+python stat_arb/run_accounting_audit.py --check
+```
+
+The static-venue +1.44 result remains an earlier, differently restricted experiment whose old accounting is not validated by the table above. No corrected funded B3 profitability is established. The confirmed fixes, search-family limits and next experiments are in [docs/accounting_audit.md](docs/accounting_audit.md).
+
+
 Market-neutral cryptocurrency statistical arbitrage: signed-graph clustering over a market-mode-residualized correlation graph, with walk-forward backtesting, explicit transaction-cost modelling, and multiple-testing-aware validation.
+
+**Sample:** ETH-relative spot brackets from 2016-01-01 to 2025-06-30, with
+point-in-time CMC membership including dead tokens. This covers ten calendar
+years, with only the first half of 2025. Perpetual membership is a later static
+ticker snapshot, not a historical listing master; the dated audit below does
+not establish executable returns.
 
 ## What it does
 
 - **Removes the market mode by PCA**, then builds a signed k-nearest-neighbour correlation graph on the residuals, so clusters reflect relative rather than common movement
-- **Clusters with twelve signed-graph methods**, from SPONGE and Balance Normalized Cut through the regularized and power-mean Laplacians of the 2019-2021 literature to three deliberately naive baselines, compared like-for-like with the number of clusters chosen inside each walk-forward window
+- **Compares twelve clustering methods, including signed graphs and unsigned controls**, from SPONGE and Balance Normalized Cut through the regularized and power-mean Laplacians of the 2019-2021 literature to three deliberately naive baselines, compared like-for-like with the number of clusters chosen inside each walk-forward window
 - **Trades cluster mean reversion** under a daily turnover cap, a no-trade band, and a rebalance-frequency control
 - **Validates with Probabilistic and Deflated Sharpe Ratios**, treating each sweep as its own multiple-testing pool, plus a financing-carry stress for perpetual funding
 - **Rebuilds its own universe point-in-time from CoinMarketCap, including tokens that died**, and measures what their absence was worth
 - **Cuts that universe into four ETH-relative market-cap brackets** and asks where along the cap spectrum within-cluster mean reversion exists, and where it can actually be traded
 
-## The hypothesis, and where it survives
+## Historical hypothesis and log-score experiments
 
 The pre-backtest report defined a small cap not in dollars but as a band of
 Ethereum's market cap: tokens between 0.001% and 0.1% of ETH, sampled every 30
@@ -46,40 +78,40 @@ lists in 2015-08, and no ETH-relative bracket can be defined before its
 reference exists.
 
 Two structural facts fall out of the definition before any strategy is run.
-**B0 never reaches 30 members**, so it cannot be clustered at all and is handled
-separately by a pairs book and a cross-sectional z-score, residualized against
-BTC and the value-weighted market rather than ETH. **B1 clears 30 members in
+**B0 never reaches 30 members**, so it cannot be clustered at all. Its proposed
+pairs book and cross-sectional z-score were not implemented. **B1 clears 30 members in
 only 20 of 114 month-ends**, so for most of the sample the large-cap bracket is
 too thin to cluster. That is a result about the shape of the crypto
 cross-section, not a defect in the data.
 
-### The verdict so far
+### Historical verdict, withdrawn as capital performance
 
 Measured on the point-in-time universe with the signal held fixed
 (2% no-trade band, rebalance every 3 days, net of 50 bps, $50k/day floor):
 
-| bracket | best signal | net @50bps | tradeable, after funding | verdict |
+| bracket | best signal | net @50bps | static venue subset, observed funding | verdict |
 |---|---|---|---|---|
 | B0 mega | not clustered | - | - | never reaches 30 members; a pairs book, not a cluster book |
-| B1 large | death filter | +0.52 | **-0.05** | shortable, but only 18 names survive the cut, below the clustering floor |
-| B2 mid | ewma | +0.44 | **-0.22** | clusterable and half shortable; the edge does not survive the restriction |
-| B3 small | ewma_sized | +1.51 | **+1.44** | the original band, and the only one that survives every restriction |
+| B1 large | death filter | +0.52 | **-0.05** | static matches average 18 names, below the clustering floor |
+| B2 mid | ewma | +0.44 | **-0.22** | the result fails even on the static subset |
+| B3 small | ewma_sized | +1.51 | **+1.44** | positive on the static subset; historical executability unverified |
 
-The answer is not the one the perpetual-coverage table suggested: **the original
-small-cap band is the one that works, and it works because it is big enough to
-survive being cut down.** B3 loses two thirds of its members to the shortability
-restriction and still has 87, comfortably above the 30 needed to cluster. B1 has
-the best shortability in the panel and only 18 names left after the cut, below
-the floor. Size of cross-section, not availability of a short, is what binds.
+The original small-cap band retains a positive backtest under a static venue
+filter. B3 keeps 87 average members after that filter; B1 keeps 18. These counts
+explain a cross-section difference within the proxy experiment. A venue listing
+observed later does not establish that the short existed on the historical
+trading day. The availability audit below measures that unresolved gap.
 
-**The clustering and execution methodology is the contribution. The Sharpe was
-survivorship, and what recovers it is not better clustering but a better
-standardisation: an EWMA z-score in place of a 20-day rolling one is worth 1.9
-Sharpe on the small-cap bracket, point-in-time, after costs. Funding on that
-bracket is measured on only 13% of exposure, so +1.44 after funding is a lower
-bound on cost rather than a settled number.**
+The apparent small-cap recovery below was measured with the retired log-score
+accounting. It does not establish improved capital returns. The corrected fixed
+EWMA book above is insolvent; the separately sized/static-funded arm has not
+been validated with the corrected ledger. Missing signed funding remains
+neither a cost bound nor a Sharpe bound.
 
-## Clustering methods compared, and a dumb baseline that wins
+## Historical log-score result: Clustering methods compared, and a dumb baseline that wins
+
+**Accounting status:** the following performance table uses retired weighted-log
+accounting. Preserve it as history, not as an investable-return estimate.
 
 Twelve methods, three brackets, two survivorship treatments, k selected inside
 each walk-forward window by signflip parallel analysis, everything else held
@@ -140,7 +172,10 @@ RegSignedSpectral has the best Calinski-Harabasz score in the bracket (854
 against PCA-kmeans's 147) and the second-worst net Sharpe. A partition-quality
 score rewards a tidy partition, not a tradable one.
 
-## What "the market" is differs by bracket, and PCA is not it
+## Historical log-score result: What "the market" is differs by bracket, and PCA is not it
+
+**Accounting status:** the following performance table uses retired weighted-log
+accounting. Preserve it as history, not as an investable-return estimate.
 
 The original report residualized against ETH. The rebuild residualized against a
 PCA market mode. Neither was ever tested against the other, so both are run as
@@ -190,7 +225,10 @@ ablation was run to answer: ETH-excess for B1 and B3, the value-weighted market
 for B2. The B2 and B3 differences are between negative numbers, so they rank
 least-bad rather than best.
 
-## Signal extensions: the standardisation was throwing the signal away
+## Historical log-score result: Signal extensions: the standardisation was throwing the signal away
+
+**Accounting status:** the following performance table uses retired weighted-log
+accounting. Preserve it as history, not as an investable-return estimate.
 
 Eight arms per bracket, each changing one thing about how the deviation from a
 cluster is measured or sized, everything else held fixed. Net Sharpe at 50 bps
@@ -268,33 +306,27 @@ it in every cell**, which is the Avellaneda-Lee condition earning its place:
 dropping tokens whose implied reversion is slower than the holding horizon is
 worth 0.3 to 0.5 Sharpe.
 
-## The tradability verdict, and it is not the expected shape
+## Historical log-score result: The static venue-subset experiment, and its historical limit
 
-Restricting each bracket to names with a listed perpetual on Binance,
-Hyperliquid, dYdX v4 or Deribit, then charging measured funding to the positions
-actually held. Each bracket runs its own best Step 3 arm:
+**Accounting status:** the following performance table uses retired weighted-log
+accounting. Preserve it as history, not as an investable-return estimate.
 
-| bracket | arm | all names | shortable only | after funding | members kept | funding covered (exposure) |
+The existing runner restricts each bracket using a later snapshot of perpetual
+tickers on Binance, Hyperliquid, dYdX v4 or Deribit, then applies observed funding
+to its simulated positions. It uses the selected Step 3 arm labels. The snapshot
+has no listing date and matches symbols rather than verified instrument ids.
+These are proxy results, not a historical shortability test:
+
+| bracket | arm | all names | static venue subset | observed funding | members kept | funding covered (exposure) |
 |---|---|---|---|---|---|---|
 | B1 large | death | +0.40 | -0.15 | **-0.05** | 18 of 21 (86%) | 72% |
 | B2 mid | ewma | +0.44 | -0.27 | **-0.22** | 57 of 99 (58%) | 67% |
 | B3 small | ewma_sized | +1.51 | +1.45 | **+1.44** | 87 of 261 (33%) | 13% |
 
-**This is the opposite of the expected shape.** The prediction was that large
-caps would be shortable but short of dispersion, and small caps would have the
-dispersion but no shorts. What happens instead is that B3 keeps only a third of
-its names and holds its result, while B1 and B2 keep most of theirs and are
-destroyed by the restriction.
-
-The reason is the clustering floor rather than anything about dispersion. B3
-retains 87 shortable members, comfortably above the 30 needed to cluster, so the
-book is intact. B1 falls to 18, below the floor, and B2's 57 come from a bracket
-whose signal was marginal to begin with. Shortability does not bind on B3
-because B3 is large enough to lose two thirds of itself and still be a
-cross-section.
-
-Funding is close to irrelevant at these sizes: it costs B3 0.01 Sharpe and
-helps B1, whose short leg earns more funding than it pays.
+The proxy keeps a positive B3 result and negative B1/B2 results. It does not
+adjudicate the original prediction about historically available shorts. The
+measured funding changes B3's Sharpe by about 0.01 and helps B1, but cannot be
+called irrelevant while most B3 exposure lacks a rate.
 
 **Funding coverage is reported two ways** because the naive one misleads.
 `cov(exposure)` is the share of the book's total absolute position sitting on a
@@ -302,15 +334,64 @@ name with a measured rate on the day it is held; `cov(col)` is the share of the
 bracket's return columns carrying a rate at all, which is dragged down by tokens
 that passed through the bracket years before any venue listed a perpetual on
 them, including names the book never holds. B1 and B2 clear two thirds of
-exposure covered. **B3 does not: at 13% of exposure, its after-funding figure is
-a lower bound on the cost, not a full accounting.** The book concentrates its
-positions in exactly the names and years that no venue quoted, which is what
-being a small-cap book over 2016-2025 means. Binance's archive begins in 2020,
-and Hyperliquid, the only other venue whose history was pulled, lists just 6
-bases Binance does not already carry, so this gap is not closable from the
-venues a US IP can reach.
+exposure covered. **B3 covers only 13%.** The unobserved funding can be positive
+or negative; zero-filling it is neither a cost bound nor a Sharpe bound. The
+current committed archive begins in 2020. Its gaps do not prove that a contract
+was unavailable elsewhere, and cannot be turned into a historical listing
+calendar.
 
-## Survivorship is a small-cap phenomenon, and it scales down the spectrum
+### Dated support for the static matches
+
+**Scope:** 3,469 calendar days, 2016-01-01 to 2025-06-30, committed point-in-time
+spot-bracket membership before strategy liquidity/history filters. Before
+computing this diagnostic, the audit hypothesis was that the static matches
+have funding evidence on the preceding calendar day. This is a retrospective
+data-quality check, not a new investment hypothesis or untouched holdout.
+
+A match receives dated support only when its normalized symbol is unique in the
+full committed universe metadata and a finite funding rate exists on the prior
+calendar day. Zero and negative rates count; future observations, forward fills
+and ambiguous ticker matches do not. This intentionally conservative archive
+test does not establish the publication time or the ability to execute.
+
+| bracket | static-matched member-days | dated, unambiguous member-days | supported share | average static members | average supported members | days with at least 30 supported members |
+|---|---|---|---|---|---|---|
+| B0 | 15,461 | 3,233 | 20.9% | 4.5 | 0.9 | 0 / 3,469 |
+| B1 | 67,650 | 27,178 | 40.2% | 19.5 | 7.8 | 0 / 3,469 |
+| B2 | 221,711 | 90,748 | 40.9% | 63.9 | 26.2 | 1,566 / 3,469 |
+| B3 | **363,090** | **105,193** | **29.0%** | **104.7** | **30.3** | **1,164 / 3,469** |
+
+Source: `stat_arb/reporting/brackets/availability_summary.csv`. These are
+membership counts, not the earlier table's exposure-weighted funding coverage
+or its counts after liquidity filters. The annual table is
+`availability_by_year.csv`; B3 has no supported member-days in 2016-2019 and
+first reaches 30 supported members on some days in 2021. Its 2025 row contains
+181 days. B3 also has 1,946 spot member-days with no id in the committed universe
+metadata; the audit retains them as unknown. Ambiguity is checked against the
+full metadata snapshot, so the exclusions are a conservative identity screen,
+not a reconstructed point-in-time instrument map.
+
+**The support hypothesis fails.** The earlier +1.44 Sharpe remains a static
+venue-subset result. Only 29.0% of B3's static-matched member-days pass this
+dated identity screen, so it cannot establish a ten-year executable strategy.
+This audit does not rerun returns on the supported subset, impute missing rates,
+or claim that unsupported days were impossible to trade. The next independent
+replication needs verified dated contract identities and settlement-aware
+funding. Literature and audit protocol: [review notes](docs/availability_review_2026.md).
+
+Five-minute offline check:
+
+```bash
+python stat_arb/run_availability_audit.py --check
+```
+
+This reconstructs the opening bracket table from 456 committed month-end rows
+and verifies all three audit CSVs. No data endpoint or credential is used.
+
+## Historical log-score result: Survivorship is a small-cap phenomenon, and it scales down the spectrum
+
+**Accounting status:** the following performance table uses retired weighted-log
+accounting. Preserve it as history, not as an investable-return estimate.
 
 Running the same ablation on the survivor-only universe (the same bracket, the
 same signal, minus the tokens that are dead today) turns the headline finding
@@ -340,7 +421,10 @@ ETH-excess. Removing principal components makes the book look better only on a
 universe that has had its losers deleted, which is the single most important
 reason not to select a residualization on survivor data.
 
-## Headline result: the alpha was survivorship
+## Historical log-score result: Headline result: the alpha was survivorship
+
+**Accounting status:** the following performance table uses retired weighted-log
+accounting. Preserve it as history, not as an investable-return estimate.
 
 The previous version of this README reported a net Sharpe of 2.30 after 50bps and argued the edge was an illiquidity effect. It also said that settling the survivorship question "needs point-in-time listing history including dead tokens, which is a paid dataset and has not been purchased."
 
@@ -413,7 +497,7 @@ Removing survivorship means admitting micro-caps whose CMC series contain redeno
 
 Circulating supply separates a redenomination (PUPS: price ÷10.4 as supply ×9.4, market cap flat) from a bad print, but not the bad prints above, which leave supply untouched. The panel therefore drops any daily move beyond `|log r| > log 5`: **328 daily observations, 0.06% of the panel**. Dropping rather than winsorising is the conservative choice, since it removes the most profitable-looking reversals from a mean-reversion book. `python stat_arb/run_pit_robustness.py` reports the count.
 
-## The short leg mostly cannot be traded
+## Earlier single-venue coverage check
 
 The backtest is dollar-neutral, so it needs a short in every name it sells. Against Hyperliquid's listed perpetuals, for the committed 174-token universe:
 
@@ -423,35 +507,27 @@ The backtest is dollar-neutral, so it needs a short in every name it sells. Agai
 | with a listed perpetual | 22 | **12.6%** |
 | with funding history over the sample | 11 | **6.3%** |
 
-**Roughly seven in eight names have no perpetual market.** That is a harder constraint than any cost assumption: it is not that shorting is expensive, it is that there is no venue. It also compounds the finding above rather than sitting beside it: the point-in-time universe is *larger* and *deeper into the tail* than the committed one, so its shortable share can only be worse.
+**Roughly seven in eight names have no Hyperliquid match in that snapshot.** This does not establish absence on other venues or over historical dates. The later multi-venue experiment and dated availability audit supersede the earlier claim that no short existed.
 
 For the 11 names that can be shorted and do have history, real funding is measured rather than approximated by the uniform `carry_bps_daily` knob:
 
 - cross-token mean annualised funding **+5.56%** (positive means longs pay shorts, so a short position *earns* it)
 - dispersion is enormous: **+49.1% (ILV) to -39.2% (BNT)**, with daily funding volatility reaching 133 bps for GAS
 
-Funding is sourced from Hyperliquid rather than Binance for a reproducibility reason worth stating: **Binance's futures endpoints return HTTP 451 to US IP addresses**, so a US-based reader cannot reproduce a Binance-sourced funding series. Hyperliquid is an on-chain venue with an open API and no such restriction.
+This earlier check used Hyperliquid after Binance's REST endpoint returned HTTP 451 from the test location. The later bracket work obtained Binance's static archive, which was reachable. REST reachability and archive availability are distinct.
 
-### That +5.56% is a regime that ended
+### That +5.56% is a sample estimate
 
 Borri, Liu, Tsyvinski and Wu, ["Cryptocurrency as an Investable Asset Class: Coming of Age"](https://arxiv.org/abs/2510.14435) (arXiv:2510.14435), measure the Schmeling, Schrimpf and Todorov crypto-carry trade (short the perpetual, long the spot) and report an annualised Sharpe of **6.45** over 2020 to 2025, falling to **4.06** from 2024 and **turning negative in 2025**. Funding contributes a full-sample mean of roughly 8% at 0.8% volatility.
 
-Their measurement is Bitcoin on Binance at 8-hour frequency, not a cross-section of altcoin perpetuals on Hyperliquid, so it is not a like-for-like comparison with the +5.56% above. The direction still matters: this repository's sample runs to May 2025, so the funding it measures spans exactly the period over which the carry compressed and then inverted. Treating +5.56% as a standing subsidy to the short leg extrapolates a regime that the best current evidence says has ended.
+Their measurement is Bitcoin on Binance at 8-hour frequency from 2020-08-01 to 2025-05-31, not a cross-section of altcoin perpetuals on Hyperliquid. It demonstrates variation in that carry sample; it does not establish that altcoin funding permanently inverted. The +5.56% above is a sample estimate, not a guaranteed subsidy to the short leg. The version and sample are recorded in [the audit notes](docs/availability_review_2026.md).
 
-## What the repository does establish
+## What the repository establishes after the accounting repair
 
-- Signed-graph clustering (SPONGE, BNC, signed spectral) on a market-mode-residualized correlation graph, compared like-for-like across methods
-- A reproducible point-in-time crypto universe including delisted tokens, built from public endpoints with no vendor licence, keyed on permanent `cmc_id` rather than reusable symbols
-- That cluster mean-reversion alpha decays over multi-day horizons: trading every third day with a 2% no-trade band retains ~97% of gross Sharpe at a third of the turnover, which is Garleanu and Pedersen "aim in front of the target" showing up empirically
-- Multiple-testing discipline throughout: Probabilistic and Deflated Sharpe Ratios, with each sweep treated as its own trial pool
+The point-in-time universe, signed clustering implementations and historical research record remain useful. The old strategy Sharpe tables used weighted excess log returns, which are not self-financing capital P&L. They are preserved as historical scores, not executable profitability. The eight-arm DSR is conditional on earlier reference, clustering and execution choices and does not correct the entire research history.
 
-**The clustering and execution methodology is the contribution. The Sharpe was
-survivorship, and the bracket that survives every restriction is B3, the
-original small-cap band, traded with an EWMA-standardised signal.** B1, the
-bracket that looked most promising on shortability, clears the 30-member
-clustering floor in only 20 of 114 months and falls to 18 names once cut to
-those with a listed perpetual, which is below the floor. What recovers the
-result is not better clustering but a better standardisation.
+The six fixed baseline/EWMA replications use a dollar-holdings ledger, actual drift trades, costs and the enforced 30-name floor. The B3 baseline and EWMA proxy books become insolvent, so no full-period capital Sharpe is reported for either. Actual perpetual listings, margin rules, liquidation and complete funding histories remain outside this spot-return proxy.
+
 
 ## Factor diagnostics (secondary)
 
@@ -533,7 +609,7 @@ the ones that die, so it is where a survivorship effect should show up first.
 python -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip
-pip install numpy pandas scipy scikit-learn matplotlib statsmodels pyarrow pytest
+pip install -r requirements.txt
 ```
 
 Run the test suite:
@@ -543,6 +619,10 @@ python -m pytest tests -q
 ```
 
 ## Reproducing the results
+
+The aggregate accounting and availability checks run offline. Research runners
+now write separate `_corrected.csv` files and may stop on insolvency; they do
+not silently regenerate or overwrite the historical log-score tables.
 
 Build the point-in-time universe (~2,000 keyless requests, roughly 20 minutes; the raw pull is cached under `data/raw_cmc/` so a failure resumes rather than restarting):
 
@@ -592,7 +672,12 @@ The point-in-time path replaces the snapshot universe at the front of that pipel
 
 Primary outputs are written under `stat_arb/reporting/` and include fold-level returns, turnover series, clustering sweep summaries, leaderboards, and the final report. The intended use is comparative research across clustering methods rather than a production-ready live trading engine.
 
-Reported Sharpe ratios are accompanied by the Probabilistic Sharpe Ratio and the Deflated Sharpe Ratio (Bailey and López de Prado), with each sweep treated as its own multiple-testing pool. On the committed snapshot universe the finding came in two halves: under daily rebalancing (phases 1-2) gross Sharpe is positive across all 16 configurations but nothing survives realistic taker costs, and the phase-3 execution experiments then show the alpha decays over multi-day horizons, lifting net Sharpe at 50bps from 1.0 to 2.3. The point-in-time rebuild supersedes that headline: on a universe that contains the tokens which died, the same configuration returns a net Sharpe of -0.14. The bracket work supersedes it again. Cut into ETH-relative market-cap brackets over 2016-2025, the original small-cap band (B3) returns +1.45 net of 50 bps once the signal is standardised with an EWMA rather than a 20-day rolling window, and +1.48 after restricting to names with a listed perpetual and charging measured funding. The clustering is not what changed.
+The older phase and bracket Sharpe tables use weighted log-return scores.
+Their recovery and transaction-cost claims are retired as capital-performance
+conclusions. The fixed six-row holdings replay at the top is the current
+measurement; the remaining old parameter, method and funded-subset tables have
+not all been rerun. Historical within-sweep DSR corrections do not account for
+the cumulative research family and cannot correct faulty accounting.
 
 ### 2026-08 revision
 
@@ -644,10 +729,7 @@ Results were regenerated after a signal-integrity pass. The material fixes, each
 
 ## Known limits
 
-- **The point-in-time edge lives in one bracket and one signal.** B3 with EWMA
-  standardisation is +1.45 net of 50 bps; B1 and B2 are negative once restricted
-  to shortable names. Everything above zero in the pre-2026-09 published figures
-  is still selection
+- **The historical point-in-time edge lived in one bracket and one signal, on the retired log-score basis.** B3 with EWMA standardisation scored +1.45 net of 50 bps on weighted excess log returns; on the cash-and-holdings ledger the same configuration is insolvent on 2020-03-14 (correction table at the top). No capital Sharpe is claimed for B3, and the surviving B1 and B2 rows are spot-proxy results, not executable returns
 - **The EWMA half-life is one number chosen without a sweep.** It was fixed at
   10 days before any of these results were seen, and
   `stat_arb/reporting/brackets/ewma_robustness.csv` reports 5 and 20 as
@@ -660,7 +742,9 @@ Results were regenerated after a signal-integrity pass. The material fixes, each
   archive begins in 2020 while the panel begins in 2016, and Hyperliquid, which
   is the only other venue whose history was pulled, lists just 6 bases Binance
   does not already carry. Where a rate is missing the position contributes zero,
-  so the after-funding figure understates cost wherever coverage is partial
+  so the after-funding figure is a partial signed calculation, not a cost or
+  performance bound. The static ticker snapshot also does not establish
+  historical contract availability; the dated audit above reports that gap
 - **Micro-cap price series carry redenominations and bad prints**, and the rate
   moves by an order of magnitude across the sample. Daily observations dropped
   as artifacts, by year (`data/bracket_data_quality.csv`):
@@ -705,4 +789,5 @@ Results were regenerated after a signal-integrity pass. The material fixes, each
 
 ## License
 
-This project is distributed under the MIT License
+The code is distributed under the MIT License. Data retains its source-specific
+terms, including Coin Metrics CC BY-NC 4.0. See [DATA.md](DATA.md).

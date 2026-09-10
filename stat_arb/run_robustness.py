@@ -50,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from stat_arb.data.loader import DataLoader
 from stat_arb.data.universe import UniverseManager
 from stat_arb.backtest.statistics import deflated_sharpe_ratio, per_period_sharpe
+from stat_arb.backtest.holdings import simple_from_excess_log
 from stat_arb.run_phase3 import run_phase3_config
 
 PERIODS_PER_YEAR = 365
@@ -95,7 +96,9 @@ def run_tier(excess_returns, prices, volumes, eth_data, min_volume_usd: float) -
     members = int(mask.sum(axis=1).mean()) if not mask.empty else 0
 
     result = run_phase3_config(
-        excess_returns, mask, weight_band=BEST_BAND, trade_frequency_days=BEST_FREQ
+        excess_returns, mask, weight_band=BEST_BAND, trade_frequency_days=BEST_FREQ,
+        asset_returns=simple_from_excess_log(excess_returns, eth_data["close"]),
+        missing_returns="stale_mark"
     )
     if result is None:
         return None
@@ -143,7 +146,7 @@ def main() -> int:
 
     out_dir = Path(__file__).parent / "reporting" / "robustness"
     out_dir.mkdir(parents=True, exist_ok=True)
-    table.to_csv(out_dir / "survivorship_robustness.csv")
+    table.to_csv(out_dir / "survivorship_robustness_corrected.csv")
 
     show = table[
         ["avg_members", "gross_sharpe", "sharpe", "ann_return", "ann_vol",

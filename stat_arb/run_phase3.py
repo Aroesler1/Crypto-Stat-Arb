@@ -39,6 +39,7 @@ from stat_arb.graphs.knn_graph import KNNGraphBuilder
 from stat_arb.clustering.sponge import SPONGEClustering
 from stat_arb.signals.cluster_deviation import ClusterDeviationStrategy
 from stat_arb.backtest.engine import BacktestEngine
+from stat_arb.backtest.holdings import replay_holdings, simple_from_excess_log
 from stat_arb.backtest.walk_forward import WalkForwardBacktest, WalkForwardConfig
 from stat_arb.backtest.costs import TransactionCostModel
 from stat_arb.backtest.statistics import deflated_sharpe_ratio, per_period_sharpe
@@ -108,11 +109,14 @@ def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
                       weight_band=0.0, trade_frequency_days=1,
                       n_pca_components=1, clusterer=None, n_clusters=3,
                       diagnostics=None, strategy_factory=None,
-                      cluster_selector=None, weight_filter=None):
+                      cluster_selector=None, weight_filter=None,
+                      asset_returns=None, min_cluster_members=30, funding_rates=None,
+                      missing_returns="raise"):
     """One walk-forward run of Cluster Deviation with the given controls.
 
-    Defaults reproduce phase 2 strategy 2 exactly (one PCA component removed,
-    SPONGE k=3), so every published number still comes out of this function.
+    Signal defaults retain one PCA component and SPONGE k=3. Accounting uses
+    raw simple asset returns and drifting holdings; historical log-score tables
+    do not reproduce under the corrected convention.
     The parameters exist so later steps can vary one thing at a time against
     the same signal path rather than forking it:
 
@@ -141,31 +145,33 @@ def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
                           after construction. The death filter gates the long
                           leg here.
     """
+    if asset_returns is None:
+        raise ValueError("raw simple asset_returns are required; log signals are not capital P&L")
+    if min_cluster_members < 30:
+        raise ValueError("the declared clustering floor is 30 names")
     if clusterer is None:
         clusterer = default_clusterer
     if strategy_factory is None:
         strategy_factory = default_strategy
     return_cols_to_tokens = {col: col.replace('_returns', '') for col in excess_returns.columns}
-    prev_weights = [None]
 
     def signal_func(train_returns, test_dates, full_returns, **kwargs):
         rebalance_date = test_dates[0]
 
-        if rebalance_date in universe_mask.index:
-            current_univ = universe_mask.loc[rebalance_date]
-        else:
-            prior_dates = universe_mask.index[universe_mask.index <= rebalance_date]
-            current_univ = universe_mask.loc[prior_dates[-1]] if len(prior_dates) > 0 else universe_mask.iloc[0]
+        # Membership inputs include daily closing prices and volume. Only an
+        # observation strictly before the first earned return is available.
+        prior_dates = universe_mask.index[universe_mask.index < rebalance_date]
+        if len(prior_dates) == 0:
+            return pd.DataFrame(0.0, index=test_dates, columns=full_returns.columns)
+        current_univ = universe_mask.loc[prior_dates[-1]].fillna(False)
 
         valid_return_cols = [col for col in train_returns.columns
                              if return_cols_to_tokens.get(col, '') in current_univ.index
                              and current_univ.get(return_cols_to_tokens.get(col, ''), False)]
-        if len(valid_return_cols) == 0:
-            valid_return_cols = train_returns.columns.tolist()
 
         train_subset = train_returns[valid_return_cols].dropna(
             axis=1, thresh=len(train_returns) * 0.8).fillna(0)
-        if train_subset.shape[1] < 10:
+        if train_subset.shape[1] < min_cluster_members:
             return pd.DataFrame(0, index=test_dates, columns=full_returns.columns)
 
         if n_pca_components > 0:
@@ -257,26 +263,38 @@ def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
         scale = (target_leverage / gross.replace(0, np.nan)).fillna(0.0)
         return weights.mul(scale, axis=0)
 
-    portfolio_func = make_execution_portfolio_func(
-        prev_weights, weight_band=weight_band, trade_frequency_days=trade_frequency_days)
+    # First assemble fold targets. Holdings and the rebalance clock are replayed
+    # continuously over the entire evaluation calendar, not reset at each fold.
+    def portfolio_func(signals, returns, **kwargs):
+        return signals
 
     wf = WalkForwardBacktest(WalkForwardConfig(
         train_window=365, test_window=28, refit_frequency=28, min_train_history=365))
     weights, fold_info = wf.run_backtest(
         returns=excess_returns, signal_func=signal_func, portfolio_func=portfolio_func)
 
+    if any(fold["status"] != "success" for fold in fold_info):
+        raise ValueError("a walk-forward fold failed; partial-calendar scoring is forbidden")
     if weights.empty or weights.abs().sum().sum() == 0:
         return None
+    settings = dict(weight_band=weight_band, trade_frequency_days=trade_frequency_days,
+                    missing_returns=missing_returns)
+    ledgers = {bps: replay_holdings(weights, asset_returns, cost_bps=bps, **settings)
+               for bps in (50, 25, 0)}
+    book = ledgers[50]
+    out = {'weights': book.weights, 'gross_returns': ledgers[0].daily.net_return,
+           'turnover': book.daily.turnover, 'ledger': book.daily}
+    for bps in (25, 50):
+        out[f'net_{bps}'] = ledgers[bps].daily.net_return
+    # Costs change subsequent equity and trades, so a linear break-even estimate
+    # from one fixed-weight path is not an exact threshold for this ledger.
+    out['breakeven'] = np.nan
+    if funding_rates is not None:
+        funded = replay_holdings(weights, asset_returns, cost_bps=50,
+                                 funding_rates=funding_rates, **settings)
+        out['funded_ledger'] = funded.daily
+        out['funded_weights'] = funded.weights
 
-    engine = BacktestEngine()
-    turnover = engine.compute_turnover(weights)
-    gross_ret = engine.compute_gross_returns(weights, excess_returns)
-
-    out = {'weights': weights, 'gross_returns': gross_ret, 'turnover': turnover}
-    for cost_bps in (25, 50):
-        net, _, _ = engine.compute_net_returns(weights, excess_returns, cost_bps=cost_bps)
-        out[f'net_{cost_bps}'] = net
-    out['breakeven'] = TransactionCostModel().find_breakeven_cost(gross_ret, turnover)
     return out
 
 
@@ -304,7 +322,9 @@ def run_phase3(bands=(0.0, 0.02, 0.05), frequencies=(1, 2, 3, 5), verbose=True):
             if verbose:
                 print(f"[{idx}/{total}] band={band:.2f}, freq={freq}d...", flush=True)
             result = run_phase3_config(
-                excess_returns, universe_mask, weight_band=band, trade_frequency_days=freq)
+                excess_returns, universe_mask, weight_band=band, trade_frequency_days=freq,
+                asset_returns=simple_from_excess_log(excess_returns, eth_data["close"]),
+                missing_returns="stale_mark")
             if result is None:
                 continue
             row = {
@@ -336,7 +356,7 @@ def run_phase3(bands=(0.0, 0.02, 0.05), frequencies=(1, 2, 3, 5), verbose=True):
 
     results_dir = Path(__file__).parent / 'reporting' / 'phase3'
     results_dir.mkdir(parents=True, exist_ok=True)
-    results.to_csv(results_dir / 'execution_experiments.csv', index=False)
+    results.to_csv(results_dir / 'execution_experiments_corrected.csv', index=False)
 
     if verbose:
         print("\nPHASE 3: EXECUTION EXPERIMENTS (Cluster Dev, SPONGE k=3)")

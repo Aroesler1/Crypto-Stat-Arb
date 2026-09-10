@@ -15,6 +15,8 @@ The new engine marks dollar holdings with raw simple returns, finances trades th
 | B3 baseline | -0.423 | insolvent on 2017-12-08 | not a full-period estimate |
 | B3 EWMA | 1.452 | insolvent on 2020-03-14 | not a full-period estimate |
 
+The two insolvencies differ in kind. The B3 baseline's, on 2017-12-08, is driven by a single near-zero-volume token: Virtacoin (cmc_id 520, VTA), whose quoted price went from $0.000002 to $0.000065 and back to $0.000003 between 2017-12-04 and 2017-12-07 on under $900 of daily volume, before its delisting in February 2020. The B3 EWMA book's, on 2020-03-14, follows the 2020-03-12 crash, when the median B3 member fell by about 38% in a day. The ledger treats both the same way, and it should: a book that one illiquid quote can bankrupt is not investable either.
+
 Sources: [six-row comparison](stat_arb/reporting/brackets/accounting_summary.csv) and [daily portfolio returns](stat_arb/reporting/brackets/accounting_daily.csv). The capital model permits leveraged shorts and stops at nonpositive equity; it does not simulate a venue's liquidation system. No loss was clipped, book restarted or risk rule retuned after the failure.
 
 ```bash
@@ -727,10 +729,7 @@ Results were regenerated after a signal-integrity pass. The material fixes, each
 
 ## Known limits
 
-- **The point-in-time edge lives in one bracket and one signal.** B3 with EWMA
-  standardisation is +1.45 net of 50 bps; B1 and B2 are negative once restricted
-  to the static venue subset. Everything above zero in the pre-2026-09 published figures
-  is still selection
+- **The historical point-in-time edge lived in one bracket and one signal, on the retired log-score basis.** B3 with EWMA standardisation scored +1.45 net of 50 bps on weighted excess log returns; on the cash-and-holdings ledger the same configuration is insolvent on 2020-03-14 (correction table at the top). No capital Sharpe is claimed for B3, and the surviving B1 and B2 rows are spot-proxy results, not executable returns
 - **The EWMA half-life is one number chosen without a sweep.** It was fixed at
   10 days before any of these results were seen, and
   `stat_arb/reporting/brackets/ewma_robustness.csv` reports 5 and 20 as

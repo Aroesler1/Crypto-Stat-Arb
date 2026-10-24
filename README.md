@@ -36,7 +36,7 @@ returns, SPONGE with three clusters
   Sharpe of 1.45 and was the project's best number
   ([signal_ablation.csv](stat_arb/reporting/brackets/signal_ablation.csv)). Held
   as cash and dollar holdings, both fixed B3 books go insolvent.
-- **Some B3 books stay solvent, but not once the short leg must exist.** Of eight
+- **Some B3 books stay solvent, but the edge disappears once shorts must be tradable.** Of eight
   signal arms on point-in-time B3, four survive the ledger; the best, the
   Avellaneda-Lee s-score without its half-life filter, has a net Sharpe of 1.16
   ([signal_ablation_corrected.csv](stat_arb/reporting/brackets/signal_ablation_corrected.csv)).
@@ -123,7 +123,7 @@ returns, SPONGE with three clusters
 | `tests/` | offline unit and regression tests |
 | `docs/` | research log, audits and literature notes |
 | `crypto_project.ipynb`, `Crypto_Project_Report_Pre_Backtest.pdf` | May 2025 exploratory work, before any backtest |
-| `archived_research/` | early exploratory files kept for reference |
+| `archived_research/` | May 2025 exploratory files: an early notebook, Tableau correlation charts and the clustering figures from `crypto_project.ipynb` |
 
 ## Running it
 

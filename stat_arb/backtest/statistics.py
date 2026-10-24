@@ -146,7 +146,7 @@ def deflated_sharpe_ratio(
 # ---------------------------------------------------------------------------
 # Romano-Wolf stepwise multiple testing
 #
-# Ported from ~/Desktop/Quant_Projects/VOO_Backtest/statistics_mt.py, with a
+# Ported from statistics_mt.py in the voo-constituent-sma-backtest repository, with a
 # two-sided option added: the factor table tests whether a point-in-time Sharpe
 # differs from its survivor counterpart, and that difference can legitimately go
 # either way, so a one-sided test would only ever find bias in the direction it

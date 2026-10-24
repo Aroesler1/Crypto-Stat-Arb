@@ -41,8 +41,8 @@ Contract, as implemented in `sponge.py`, `bnc.py` and `signed_spectral.py`:
   `KSelector.eigengap` must not be called on it.
 - The final partition comes from `sklearn.cluster.KMeans(n_init=10,
   random_state=self.random_state)`. `random_state` is load-bearing: the repo has
-  already been burned once by nondeterminism in the clustering path (see
-  `handoff.md`, the `PYTHONHASHSEED` column-order defect), so any new method
+  already been burned once by nondeterminism in the clustering path (see the
+  `PYTHONHASHSEED` column-order defect in `audit_history.md`), so any new method
   must be seeded and must be deterministic given a fixed input matrix.
 - Optional but conventional: `compute_*_objective(adjacency, labels)` and
   `get_cluster_members(tokens)`.
@@ -60,7 +60,7 @@ matrix of residual returns is sparsified to a symmetric k-NN graph (default
 k = 10, symmetrized by averaging the two directed selections, zero diagonal),
 and the retained entries keep their signed correlation value. So:
 
-- n is in the low hundreds. `handoff.md` reports 134 members in the baseline
+- n is in the low hundreds. The research log reports 134 members in the baseline
   and 224-284 across universes, and the point-in-time universe tops out at 933
   tokens after exclusions. Treat n <= 1000 as the design point.
 - Edge count is O(kn), roughly 10n to 20n after symmetrization, so the graph is
@@ -587,7 +587,7 @@ current dependency set is eight pure-Python scientific packages.
 **3. Cost.** Training is O(epochs * (m * d + n * d^2)) for hidden width d. At
 n = 300 that is fast in wall-clock terms, but it introduces GPU/CPU
 nondeterminism, seed sensitivity, and an early-stopping decision, all of which
-are hostile to a backtest that must reproduce bit-for-bit (see `handoff.md`).
+are hostile to a backtest that must reproduce bit-for-bit (see `audit_history.md`).
 
 **4. Features.** **Requires node features.** For featureless graphs the paper
 constructs them from the graph itself: "eigenvectors corresponding to the largest

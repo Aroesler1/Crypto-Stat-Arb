@@ -57,6 +57,8 @@ def verify(directory):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data")
+    parser.add_argument("--panel", type=Path, default=None,
+                        help="daily listings panel (default: <data-dir>/pit_daily_listings.parquet)")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
     out = ROOT / "stat_arb/reporting/brackets"
@@ -65,7 +67,7 @@ def main(argv=None):
         print("Verified six fixed accounting rows from committed daily portfolio returns")
         return
     table, assignments, close, volume, _, refs, index = load_inputs(
-        args.data_dir / "pit_daily_listings.parquet", args.data_dir,
+        args.panel or args.data_dir / "pit_daily_listings.parquet", args.data_dir,
         B.BRACKET_START, pd.Timestamp("2025-06-30"))
     legacy = pd.read_csv(out / "signal_ablation.csv")
     rows, paths = [], []

@@ -199,14 +199,21 @@ class OUScoreStrategy:
             if len(cols) < 2:
                 continue
             s = signals[cols]
-            # entry beyond the threshold, and hold nothing inside the exit band
-            raw = (-s).where(s.abs() >= self.entry_threshold, 0.0)
+            # entry beyond the threshold, and hold nothing inside the band
+            raw = (-s).where(s.abs() >= self.entry_threshold, 0.0).fillna(0.0)
             if inv_vol is not None:
                 raw = raw * inv_vol[cols].fillna(0.0)
-            # dollar-neutral within the cluster
-            raw = raw.sub(raw.mean(axis=1), axis=0)
-            gross = raw.abs().sum(axis=1).replace(0.0, np.nan)
-            weights[cols] = raw.div(gross, axis=0).fillna(0.0)
+            # dollar-neutral within the cluster by scaling each leg to half the
+            # gross. Subtracting the cluster mean instead put positions on names
+            # inside the band and could flip a selected name's sign; a cluster
+            # with only one side selected stays flat
+            longs, shorts = raw.clip(lower=0.0), raw.clip(upper=0.0)
+            long_sum = longs.sum(axis=1)
+            short_sum = -shorts.sum(axis=1)
+            both = (long_sum > 0) & (short_sum > 0)
+            balanced = (longs.div(long_sum.where(both), axis=0)
+                        + shorts.div(short_sum.where(both), axis=0)) / 2.0
+            weights[cols] = balanced.fillna(0.0)
 
         return weights.fillna(0.0)
 

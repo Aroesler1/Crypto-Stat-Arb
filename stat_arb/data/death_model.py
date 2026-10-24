@@ -57,6 +57,10 @@ from sklearn.preprocessing import StandardScaler
 FEATURES = ("ret_30", "vol_change", "rank_change", "days_listed")
 DEFAULT_HORIZON = 30
 LOOKBACK = 30
+# Sampled rows sit on one calendar grid shared by every token. Thinning each
+# token from its own first date instead put different tokens on different days,
+# so any single date carried scores for only about 1 in `sample_every` names.
+GRID_ANCHOR = pd.Timestamp("1970-01-01")
 
 
 def build_features(panel: pd.DataFrame, universe_table: pd.DataFrame,
@@ -67,7 +71,10 @@ def build_features(panel: pd.DataFrame, universe_table: pd.DataFrame,
 
     `sample_every` thins the daily panel: consecutive days for one token are
     almost identical rows, and keeping all of them inflates the sample without
-    adding information while making the fit slower.
+    adding information while making the fit slower. Kept rows are the dates on
+    a common calendar grid (every `sample_every` days from `GRID_ANCHOR`), so
+    every live token is sampled on the same days. Use `sample_every=1` for the
+    rows the filter scores.
 
     The label is 1 if the token's death date falls within `horizon` days after
     the row's date. Censored tokens (alive, merely unranked) are never labelled
@@ -99,7 +106,8 @@ def build_features(panel: pd.DataFrame, universe_table: pd.DataFrame,
             "ret_30": ret_30, "vol_change": vol_change,
             "rank_change": rank_change, "days_listed": days_listed,
         })
-        feat = feat.iloc[::sample_every]
+        on_grid = ((feat.index - GRID_ANCHOR).days % sample_every) == 0
+        feat = feat[on_grid]
         feat = feat.replace([np.inf, -np.inf], np.nan).dropna()
         if feat.empty:
             continue
@@ -123,13 +131,27 @@ def build_features(panel: pd.DataFrame, universe_table: pd.DataFrame,
     return out.sort_values(["date", "cmc_id"]).reset_index(drop=True)
 
 
+def purged_training_rows(features: pd.DataFrame, year: int,
+                         horizon: int = DEFAULT_HORIZON) -> pd.DataFrame:
+    """Rows whose label is fully observed before `year` starts.
+
+    A row dated d is labelled with deaths in [d, d + horizon], so rows from the
+    last `horizon` days of the prior year carry labels decided inside the test
+    year. Those are purged; only rows with d + horizon before January 1 train.
+    """
+    cutoff = pd.Timestamp(f"{int(year)}-01-01") - pd.Timedelta(days=horizon)
+    return features[features["date"] < cutoff]
+
+
 def walk_forward_auc(features: pd.DataFrame, min_train_years: int = 2,
-                     min_positives: int = 20) -> tuple[pd.DataFrame, pd.DataFrame]:
+                     min_positives: int = 20,
+                     horizon: int = DEFAULT_HORIZON) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Fit by year on prior years only; report AUC and coefficients per year.
 
-    Returns (per-year metrics, per-year standardised coefficients). A year with
-    too few deaths to score, or too little history to train on, is reported as
-    skipped rather than given a fabricated AUC.
+    Training rows are purged of labels that reach into the scored year (see
+    `purged_training_rows`). Returns (per-year metrics, per-year standardised
+    coefficients). A year with too few deaths to score, or too little history
+    to train on, is reported as skipped rather than given a fabricated AUC.
     """
     f = features.copy()
     f["year"] = f["date"].dt.year
@@ -137,7 +159,7 @@ def walk_forward_auc(features: pd.DataFrame, min_train_years: int = 2,
 
     metrics, coefs = [], []
     for year in years:
-        train = f[f["year"] < year]
+        train = purged_training_rows(f, year, horizon)
         test = f[f["year"] == year]
         n_train_years = train["year"].nunique()
         if (n_train_years < min_train_years or train["dies"].sum() < min_positives
@@ -164,17 +186,23 @@ def walk_forward_auc(features: pd.DataFrame, min_train_years: int = 2,
 
 
 def death_probabilities(features: pd.DataFrame, min_train_years: int = 2,
-                        min_positives: int = 20) -> pd.DataFrame:
+                        min_positives: int = 20,
+                        score_features: pd.DataFrame | None = None,
+                        horizon: int = DEFAULT_HORIZON) -> pd.DataFrame:
     """Walk-forward out-of-sample death probability for every scored row.
 
-    This is what gates the long leg. Every probability is produced by a model
-    that never saw the year it is scoring.
+    This is what gates the long leg. The model for year Y trains on `features`
+    rows whose labels are known before Y (purged as in `walk_forward_auc`) and
+    scores the year-Y rows of `score_features`, which defaults to `features`.
+    Pass daily rows there so every live token has a score on every day.
     """
     f = features.copy()
     f["year"] = f["date"].dt.year
+    s = (features if score_features is None else score_features).copy()
+    s["year"] = s["date"].dt.year
     out = []
-    for year in sorted(f["year"].unique()):
-        train, test = f[f["year"] < year], f[f["year"] == year]
+    for year in sorted(s["year"].unique()):
+        train, test = purged_training_rows(f, year, horizon), s[s["year"] == year]
         if (train["year"].nunique() < min_train_years
                 or train["dies"].sum() < min_positives or test.empty):
             continue

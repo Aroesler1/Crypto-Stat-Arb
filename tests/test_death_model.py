@@ -273,3 +273,81 @@ def test_gate_drops_longs_but_keeps_shorts():
     out = filt(weights, list(cols_to_id), dates[1:])
     assert (out.iloc[0, -5:] == -1.0).all()      # shorts survive
     assert (out.iloc[0, -10:-5] == 0.0).all()    # risky longs are cut
+
+
+# --- 2026-10 fixes: common sampling grid, purge, trade-date read -----------
+
+def test_sampled_rows_fall_on_one_calendar_grid_for_every_token():
+    """Thinning from each token's own first date put tokens on different days.
+
+    Two tokens listed three days apart must still be sampled on the same
+    calendar dates, so a single date carries a score for both.
+    """
+    a = _panel(1, 200, start=START)
+    b = _panel(2, 200, start=START + pd.Timedelta(days=3))
+    table = _table([(1, False, None), (2, False, None)])
+    feat = M.build_features(pd.concat([a, b], ignore_index=True), table, sample_every=7)
+    dates_a = set(feat.loc[feat["cmc_id"] == 1, "date"])
+    dates_b = set(feat.loc[feat["cmc_id"] == 2, "date"])
+    overlap = [d for d in dates_a if d >= min(dates_b) and d <= max(dates_b)]
+    assert overlap and set(overlap) <= dates_b
+    assert all((d - M.GRID_ANCHOR).days % 7 == 0 for d in dates_a | dates_b)
+
+
+def test_training_rows_are_purged_at_the_year_boundary():
+    panel, table = _multi_year_sample()
+    feat = M.build_features(panel, table, sample_every=7)
+    train = M.purged_training_rows(feat, 2020, horizon=30)
+    assert train["date"].max() < pd.Timestamp("2019-12-02")
+
+
+def test_scored_year_ignores_labels_decided_inside_it():
+    """Flipping labels in the last `horizon` days of Y-1 must not move year-Y scores.
+
+    Those labels depend on deaths inside year Y, so a model that scores Y may
+    not train on them.
+    """
+    panel, table = _multi_year_sample()
+    feat = M.build_features(panel, table, sample_every=7)
+    year = 2019
+    edge = ((feat["date"] >= pd.Timestamp(f"{year}-01-01") - pd.Timedelta(days=30))
+            & (feat["date"] < pd.Timestamp(f"{year}-01-01")))
+    assert edge.any()
+    flipped = feat.copy()
+    flipped.loc[edge, "dies"] = 1 - flipped.loc[edge, "dies"]
+    base = M.death_probabilities(feat, min_train_years=1, min_positives=5)
+    moved = M.death_probabilities(flipped, min_train_years=1, min_positives=5)
+    pick = lambda p: p[p["date"].dt.year == year].reset_index(drop=True)
+    assert len(pick(base)) > 0
+    pd.testing.assert_frame_equal(pick(base), pick(moved))
+
+
+def test_daily_scoring_covers_every_live_token_on_a_day():
+    panel, table = _multi_year_sample()
+    train = M.build_features(panel, table, sample_every=7)
+    daily = M.build_features(panel, table, sample_every=1)
+    probs = M.death_probabilities(train, min_train_years=1, min_positives=5,
+                                  score_features=daily)
+    day = probs["date"].value_counts().idxmax()
+    live = daily.loc[daily["date"] == day, "cmc_id"]
+    assert set(probs.loc[probs["date"] == day, "cmc_id"]) == set(live)
+
+
+def test_gate_never_reads_a_score_dated_on_the_trade_day():
+    """A score dated on the first traded day uses that day's close."""
+    from stat_arb.run_signal_ablation import make_death_filter
+
+    dates = pd.date_range("2020-01-01", periods=2)
+    n = 20
+    early = np.linspace(0.1, 0.2, n)            # token 0 looks safest before trading
+    late = early.copy()
+    late[0] = 0.99                              # ...and riskiest on the trade day
+    probs = pd.DataFrame({"date": np.repeat(dates, n),
+                          "cmc_id": list(range(n)) * 2,
+                          "death_prob": np.concatenate([early, late])})
+    cols_to_id = {f"{i}_returns": i for i in range(n)}
+    filt = make_death_filter(probs, cols_to_id, worst_fraction=0.10)
+    weights = pd.DataFrame(1.0, index=dates[1:], columns=list(cols_to_id))
+    out = filt(weights, list(cols_to_id), dates[1:])
+    assert out.iloc[0]["0_returns"] == 1.0      # gated on information it had
+

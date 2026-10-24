@@ -28,8 +28,7 @@ from stat_arb.run_phase3 import annualized_sharpe  # noqa: E402
 from stat_arb.run_residualization_ablation import (  # noqa: E402
     BEST_BAND, BEST_FREQ, load_inputs, run_arm,
 )
-from stat_arb.run_signal_ablation import BEST_REFERENCE, arm_kwargs, make_death_filter
-from stat_arb.data import death_model as DM  # noqa: E402
+from stat_arb.run_signal_ablation import BEST_REFERENCE, arm_kwargs, build_death_filter
 
 PERIODS_PER_YEAR = 365
 
@@ -107,6 +106,22 @@ def apply_funding(weights: pd.DataFrame, funding: pd.DataFrame) -> pd.Series:
     return -(weights.fillna(0.0) * f).sum(axis=1)
 
 
+def best_arms_from_ablation(directory: Path) -> dict[str, str]:
+    """Best point-in-time arm per bracket from the capital-ledger signal ablation.
+
+    Reads `signal_ablation_corrected.csv`; the older `signal_ablation.csv` was
+    scored with the retired log-return accounting and is not used for selection.
+    Insolvent arms have no Sharpe and are never selected.
+    """
+    path = directory / "signal_ablation_corrected.csv"
+    if not path.exists():
+        return {}
+    abl = pd.read_csv(path)
+    pit = abl[(abl["treatment"] == "pit") & abl["net_sharpe"].notna()]
+    return {bracket: g.loc[g["net_sharpe"].idxmax(), "arm"]
+            for bracket, g in pit.groupby("bracket")}
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -143,26 +158,16 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  {len(short_ids)} of {len(table)} universe tokens have a listed perpetual")
 
     best_arm = args.arm
-    abl_path = root / "stat_arb" / "reporting" / "brackets" / "signal_ablation.csv"
     best_by_bracket = {}
-    if best_arm is None and abl_path.exists():
-        abl = pd.read_parquet(abl_path) if abl_path.suffix == ".parquet" else pd.read_csv(abl_path)
-        pit = abl[abl["treatment"] == "pit"]
-        for bracket, g in pit.groupby("bracket"):
-            best_by_bracket[bracket] = g.loc[g["net_sharpe"].idxmax(), "arm"]
+    if best_arm is None:
+        best_by_bracket = best_arms_from_ablation(root / "stat_arb" / "reporting" / "brackets")
         print(f"  best Step 3 arm per bracket: {best_by_bracket}")
 
     selected = {best_arm or best_by_bracket.get(b, "baseline")
                 for b in args.brackets.split(",")}
     death_filter = None
     if "death" in selected:
-        raw = pd.read_parquet(panel_path)
-        raw["date"] = pd.to_datetime(raw["date"])
-        raw = raw[raw["cmc_id"].isin(set(table["cmc_id"].astype(int)))]
-        features = DM.build_features(raw, table, sample_every=7)
-        probs = DM.death_probabilities(features)
-        death_filter = make_death_filter(probs, {
-            f"{int(c)}_returns": int(c) for c in close.columns})
+        death_filter = build_death_filter(panel_path, table, close, verbose=False)
     rows = []
     for bracket in [b.strip() for b in args.brackets.split(",") if b.strip()]:
         ids = sorted({int(c) for c in
@@ -185,10 +190,13 @@ def main(argv: list[str] | None = None) -> int:
                 funding, table, index, [f"{int(c)}_returns" for c in mask.columns])
             measured_funding = (fwide if label == "shortable only" and not funding.empty else None)
             stats = run_arm(close, volume, table, refs, reference, 0, mask, index,
-                            funding_rates=measured_funding, **arm_kwargs(arm, death_filter))
+                            funding_rates=measured_funding, record_insolvency=True,
+                            **arm_kwargs(arm, death_filter))
             if stats is None:
                 print("    produced no positions, skipped")
                 continue
+            if stats["status"] == "insolvent":
+                print(f"    insolvent on {stats['failure_date']}")
             stats.pop("net_series", None)
             stats.update(bracket=bracket, subset=label, arm=arm, reference=reference,
                          funding_coverage=len(covered) / max(len(mask.columns), 1))

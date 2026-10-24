@@ -33,6 +33,11 @@ Signed missing funding set to zero gives neither a cost nor a Sharpe bound.
 No returns were rerun, no improved specification was selected, and existing
 multiple-testing results were not replaced.
 
+Update, 2026-10-23: the +1.44 log-score figure is withdrawn. Rerun on the
+cash-and-holdings ledger, the best B3 arm on the same static venue subset has a
+net Sharpe of 0.057, and 0.051 after observed funding
+(`tradability_corrected.csv`; details in `audit_history.md`).
+
 `python stat_arb/run_availability_audit.py --check` reproduces the four opening
 universe rows from 456 committed month-end/bracket records, then verifies:
 

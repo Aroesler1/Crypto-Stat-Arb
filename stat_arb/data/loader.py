@@ -1,10 +1,18 @@
 """
 Data loading utilities for crypto stat-arb backtest.
 """
+import os
+
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Tuple, Optional, List
+
+# Raw CoinMarketCap daily close/volume for the 2023-2025 snapshot universe. It is
+# vendor data pulled with a CMC API key, so it is not distributed with the repo;
+# point STAT_ARB_RAW_DATA_DIR at a folder holding it (see DATA.md to rebuild).
+RAW_PANEL_FILE = 'all_tokens_24mo_daily.csv'
+RAW_DATA_ENV = 'STAT_ARB_RAW_DATA_DIR'
 
 # Tokens to exclude (stablecoins and wrapped assets)
 EXCLUDED_TOKENS = {
@@ -24,9 +32,23 @@ EXCLUDED_TOKENS = {
 class DataLoader:
     """Load and prepare data for backtesting."""
 
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, raw_dir: Optional[str] = None):
         self.data_dir = Path(data_dir)
+        # raw CMC panel: explicit argument, then the environment, then data_dir
+        self.raw_dir = Path(raw_dir or os.environ.get(RAW_DATA_ENV) or data_dir)
         self._cache = {}
+
+    def _load_raw_panel(self) -> pd.DataFrame:
+        """The raw per-token close/volume panel, read once and cached."""
+        if 'raw_data' not in self._cache:
+            path = self.raw_dir / RAW_PANEL_FILE
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"{path} not found. The raw CoinMarketCap panel is not "
+                    f"distributed with the repository; set {RAW_DATA_ENV} to the "
+                    f"folder that holds {RAW_PANEL_FILE} (rebuild steps in DATA.md).")
+            self._cache['raw_data'] = pd.read_csv(path, index_col=0, parse_dates=True)
+        return self._cache['raw_data']
 
     def load_excess_returns(self, exclude_stablecoins: bool = True) -> pd.DataFrame:
         """Load ETH-excess log returns."""
@@ -49,11 +71,7 @@ class DataLoader:
 
     def load_raw_prices(self, exclude_stablecoins: bool = True) -> pd.DataFrame:
         """Load raw OHLCV data and extract close prices."""
-        if 'raw_data' not in self._cache:
-            df = pd.read_csv(self.data_dir / 'all_tokens_24mo_daily.csv', index_col=0, parse_dates=True)
-            self._cache['raw_data'] = df
-
-        df = self._cache['raw_data'].copy()
+        df = self._load_raw_panel().copy()
 
         # Extract close price columns
         close_cols = [c for c in df.columns if c.endswith('_close')]
@@ -68,11 +86,7 @@ class DataLoader:
 
     def load_volumes(self, exclude_stablecoins: bool = True) -> pd.DataFrame:
         """Load trading volumes."""
-        if 'raw_data' not in self._cache:
-            df = pd.read_csv(self.data_dir / 'all_tokens_24mo_daily.csv', index_col=0, parse_dates=True)
-            self._cache['raw_data'] = df
-
-        df = self._cache['raw_data'].copy()
+        df = self._load_raw_panel().copy()
 
         # Extract volume columns
         vol_cols = [c for c in df.columns if c.endswith('_volume')]
@@ -87,11 +101,7 @@ class DataLoader:
 
     def load_market_caps(self, exclude_stablecoins: bool = True) -> pd.DataFrame:
         """Load market caps (computed from close * circulating supply proxy via volume/price)."""
-        if 'raw_data' not in self._cache:
-            df = pd.read_csv(self.data_dir / 'all_tokens_24mo_daily.csv', index_col=0, parse_dates=True)
-            self._cache['raw_data'] = df
-
-        df = self._cache['raw_data'].copy()
+        df = self._load_raw_panel().copy()
 
         # Extract market cap columns if available, else compute from close * (volume/close) as proxy
         mcap_cols = [c for c in df.columns if c.endswith('_market_cap')]

@@ -1,12 +1,12 @@
 Metric,Value
-Gross Sharpe,1.62
-Net Sharpe,-2.19
-CAGR (%),-21.79
-Ann. Return (%),-24.57
-Ann. Volatility (%),11.24
-Max Drawdown (%),-28.06
+Gross Sharpe,1.65
+Net Sharpe,-2.21
+CAGR (%),-21.70
+Ann. Return (%),-24.47
+Ann. Volatility (%),11.08
+Max Drawdown (%),-27.94
 Avg Turnover (%),23.2
-Cost Drag (%),42.15
-ETH Beta,0.0274
+Cost Drag (%),42.14
+ETH Beta,0.0261
 PC1 Beta,-0.0000
 Trading Days,364

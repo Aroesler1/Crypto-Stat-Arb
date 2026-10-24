@@ -252,6 +252,18 @@ def _log_euclidean_mean(a: np.ndarray, b: np.ndarray, floor: float = 1e-8) -> np
     return (v * np.exp(w)) @ v.T
 
 
+def power_mean_shift(p: float) -> float:
+    """Diagonal shift for a negative power, as in Mercado, Tudisco and Hein (2019).
+
+    For p < 0 the matrix power mean needs positive definite arguments, so the
+    paper averages L+_sym + eps*I and Q-_sym + eps*I with
+    eps = log10(1 + |p|) + 1e-6 in its experiments. Without it, the zero
+    eigenvalues of a sparse layer are floored at 1e-8 and raised to p, and
+    (1e-8)^-10 swamps every other eigenvalue.
+    """
+    return float(np.log10(1.0 + abs(p)) + 1e-6) if p < 0 else 0.0
+
+
 def power_mean(a: np.ndarray, b: np.ndarray, p: float) -> np.ndarray:
     """Matrix power mean ``((A^p + B^p) / 2)^{1/p}``, with the p -> 0 limit."""
     if abs(p) < 1e-6:
@@ -305,7 +317,8 @@ class PowerMeanLaplacianClustering:
         l_plus = _sym_normalized(a_plus, gamma, signless=False)
         q_minus = _sym_normalized(a_minus, gamma, signless=True)
 
-        l_p = power_mean(l_plus, q_minus, self.p)
+        shift = power_mean_shift(self.p) * np.eye(n)
+        l_p = power_mean(l_plus + shift, q_minus + shift, self.p)
         self.eigenvalues_, vectors = eigh((l_p + l_p.T) / 2.0)
         n_eigen = self.n_eigen or self.n_clusters
         self.embedding_ = _embed(vectors, n_eigen)

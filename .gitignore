@@ -28,8 +28,7 @@ __pycache__/
 # Raw CMC pull cache (derived tables are committed instead)
 data/raw_cmc/
 
-# Cross-agent working notes. Kept locally, not published: it is scratch context
-# for whoever picks the work up next, not part of the repo.
+# Local working notes, not part of the repo.
 handoff.md
 
 # The daily point-in-time listing panel: ~3,600 daily rankings x 2,000 ranks.
@@ -37,3 +36,12 @@ handoff.md
 # The derived tables it feeds (bracket_*.parquet, pit_monthly_ranks.parquet)
 # are committed instead.
 data/pit_daily_listings.parquet
+
+# Per-bracket return panels written by `run_bracket_panel.py`. No runner reads
+# them (the bracket runners rebuild returns from the daily panel), so they are
+# not committed.
+data/bracket_returns_*.parquet
+
+# Raw CoinMarketCap Pro API pull for the 2023-2025 snapshot universe. Vendor
+# data, not redistributed; see DATA.md for how to rebuild it.
+data/all_tokens_24mo_daily.csv

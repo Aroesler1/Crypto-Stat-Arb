@@ -7,6 +7,20 @@ import numpy as np
 from typing import Optional, List, Tuple
 
 
+def membership_before(universe_mask: pd.DataFrame, date) -> pd.Series:
+    """Universe membership known strictly before `date`.
+
+    The mask row for day t is built from that day's close and volume, while
+    weights dated t earn day t's return, so a book rebalancing on t may only use
+    rows dated before t. Returns all-False when no earlier row exists rather
+    than borrowing a later one.
+    """
+    prior = universe_mask.index[universe_mask.index < pd.Timestamp(date)]
+    if len(prior) == 0:
+        return pd.Series(False, index=universe_mask.columns)
+    return universe_mask.loc[prior[-1]].fillna(False).astype(bool)
+
+
 class UniverseManager:
     """
     Manage tradable universe with survivorship controls.

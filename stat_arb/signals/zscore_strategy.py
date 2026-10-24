@@ -6,6 +6,16 @@ import pandas as pd
 from typing import Optional, Dict, Tuple
 
 
+def _balance_legs(w: pd.Series) -> pd.Series:
+    """Scale longs and shorts to equal gross, keeping total gross and every sign."""
+    long_sum = w[w > 0].sum()
+    short_sum = -w[w < 0].sum()
+    if long_sum <= 0 or short_sum <= 0:
+        return w * 0.0
+    half = (long_sum + short_sum) / 2.0
+    return w.where(w <= 0, w * half / long_sum).where(w >= 0, w * half / short_sum)
+
+
 class ZScoreStrategy:
     """
     Cross-sectional z-score mean reversion strategy.
@@ -170,13 +180,12 @@ class ZScoreStrategy:
                     vol_w = vol_w / vol_w.sum()  # Re-normalize
                     w = w * vol_w * len(cluster_tokens)  # Scale
 
-                # Re-impose cluster neutrality on the TRADED names only.
-                # Demeaning over all cluster members would assign small
-                # offsetting weights to names the quantile/threshold rule
-                # never selected, inflating turnover and cost drag.
-                traded = w != 0.0
-                if traded.any():
-                    w[traded] = w[traded] - w[traded].mean()
+                # Re-impose cluster neutrality on the TRADED names only, by
+                # scaling each leg to half the cluster's gross. Subtracting the
+                # mean of the traded weights (the previous approach) could flip
+                # a vol-scaled long into a short; a cluster with only one side
+                # selected stays flat, as it does without vol weighting.
+                w = _balance_legs(w)
 
                 weights.loc[date, cluster_tokens] = w
 

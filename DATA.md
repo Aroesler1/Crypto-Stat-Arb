@@ -9,8 +9,35 @@ below. Public availability does not imply unrestricted reuse.
 
 ## What is committed
 
-- All input datasets under `data/`: token OHLCV, excess log returns, correlation matrices, ETH reference series, the token summary, and the derived point-in-time universe tables below
+- Derived datasets under `data/`: excess log returns, correlation matrices, the ETH reference series, the token summary, the derived point-in-time universe tables below, and the bracket tables
 - Source code, tests, and all reported results
+
+### Not committed: the raw 2023-2025 CoinMarketCap panel
+
+`data/all_tokens_24mo_daily.csv` (daily close and volume for the 2023-05-29 to
+2025-05-29 snapshot universe, 5.6 MB) was pulled from CoinMarketCap's Pro API
+with a paid-tier key. It is raw vendor price data, so it is no longer
+distributed with the repository (it remains in the git history of earlier
+commits). Everything derived from it that results depend on stays committed:
+`excess_log_returns.csv`, the correlation matrices and the phase result tables.
+
+Only `run_phase1.py`, `run_phase2.py`, `run_phase3.py` and `run_robustness.py`
+read the raw panel. To run them, put the file in any folder and point the loader
+at it:
+
+```bash
+export STAT_ARB_RAW_DATA_DIR=/path/to/folder/holding/the/csv
+```
+
+To rebuild it, run the data-pull code in the first code cell of
+`crypto_project.ipynb` with `CMC_API_KEY` set. It calls
+`/v1/cryptocurrency/listings/latest` and `/v1/cryptocurrency/ohlcv/historical`
+(a paid tier is needed for historical OHLCV) and writes
+`all_tokens_24mo_daily.csv`. The pull selects tokens from the listing as of the
+day it runs and ends on that day, so set `END_DT` to 2025-05-29 to cover the
+original window; the token set will still differ, because the selection is a
+present-day snapshot (which is the survivorship problem the point-in-time
+universe fixes).
 
 ### The point-in-time universe tables
 
@@ -91,12 +118,16 @@ it stood, including coins the history endpoint has dropped.
 
 Not committed: `data/pit_daily_listings.parquet` (169 MB, 5.9M rows) and
 `data/raw_cmc/listings_d2000/`. Both are gitignored and rebuildable from the
-command above. Committed instead: the derived bracket tables (48 MB), which are
-what every reported number is computed from.
+command above. Committed instead: the derived bracket tables (17.1 MB), which the
+offline checks and the availability audit read. The bracket backtest runners
+(`run_residualization_ablation.py`, `run_clustering_sweep.py`,
+`run_signal_ablation.py`, `run_tradability.py`, `run_factor_diagnostics.py` and
+`run_accounting_audit.py` without `--check`) read the daily panel itself, so
+rerunning them needs it rebuilt first.
 
-Return panels are stored float32. Daily log returns need nothing like float64
-and the round-trip error is 2.4e-07, which halved the panels from 56.6 MB to
-33.3 MB.
+`run_bracket_panel.py` also writes per-bracket return panels
+(`bracket_returns_<B>.parquet`, float32, 33.3 MB in total). No runner reads
+them, so they are gitignored rather than committed.
 
 ### Perpetual venues and funding
 
@@ -112,7 +143,8 @@ Venue reachability from a US IP, measured 2026-09-04:
 
 Binance's REST API is geo-blocked but its static archive is not, and the archive
 carries the full 8-hourly funding history. That is the difference between
-funding for 11 tokens and funding for 533. Only history is reachable this way,
+funding for 11 tokens and funding for 465 base/venue series (464 distinct bases
+in `data/funding_panel.parquet`). Only history is reachable this way,
 never live state, which is all a backtest needs.
 
 `stat_arb/build_funding_panel.py` pulls about 22,000 (contract, month) pairs,

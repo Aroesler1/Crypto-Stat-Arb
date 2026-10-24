@@ -149,10 +149,15 @@ class RecordingClusterer:
         rec = {"k_selected": int(len(np.unique(labels))), "k_requested": k,
                "eigengap": np.nan, "calinski_harabasz": np.nan,
                "davies_bouldin": np.nan, "degenerate_embedding": False}
-        ev = np.sort(np.asarray(getattr(model, "eigenvalues_", eigenvalues), dtype=float))
-        if len(ev) > k:
-            gaps = np.diff(ev[:K_MAX + 1])
-            rec["eigengap"] = float(np.nanmax(gaps)) if len(gaps) else np.nan
+        # eigengap of the method's own operator; methods without a spectrum
+        # (Hierarchical, PCA-kmeans, Pivot) get none rather than borrowing the
+        # k-selection spectrum, whose ascending |eigenvalues| measure the noise end
+        model_ev = getattr(model, "eigenvalues_", None)
+        if model_ev is not None:
+            ev = np.sort(np.asarray(model_ev, dtype=float))
+            if len(ev) > k:
+                gaps = np.diff(ev[:K_MAX + 1])
+                rec["eigengap"] = float(np.nanmax(gaps)) if len(gaps) else np.nan
         if len(np.unique(labels)) > 1 and len(labels) > len(np.unique(labels)):
             # Within-cluster scatter, to detect a degenerate embedding. The
             # power-mean operator collapses every member of a cluster onto the
@@ -220,10 +225,13 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {bracket} / {treatment} / {name} ...", flush=True)
                 rec = RecordingClusterer(name)
                 stats = run_arm(close, volume, table, refs, args.reference,
-                                args.n_pca, member, index, clusterer=rec)
+                                args.n_pca, member, index, clusterer=rec,
+                                record_insolvency=True)
                 if stats is None:
                     print("    produced no positions, skipped")
                     continue
+                if stats["status"] == "insolvent":
+                    print(f"    insolvent on {stats['failure_date']}")
                 for _k in ("net_series", "net_series_for_funding", "weights"):
                     stats.pop(_k, None)
                 d = pd.DataFrame(rec.records)
@@ -270,7 +278,7 @@ def main(argv: list[str] | None = None) -> int:
                       f"{r['davies_bouldin']:6.2f} {r['stability_ari']:9.3f}  "
                       f"{r['gross_sharpe']:5.2f}  {r['net_sharpe']:5.2f}")
 
-    print(f"\nsaved -> {out_dir / 'clustering_sweep.csv'}")
+    print(f"\nsaved -> {out_dir / 'clustering_sweep_corrected.csv'}")
     return 0
 
 

@@ -20,7 +20,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from stat_arb.data.loader import DataLoader
-from stat_arb.data.universe import UniverseManager
+from stat_arb.data.universe import UniverseManager, membership_before
 from stat_arb.pca.market_mode import MarketModeExtractor
 from stat_arb.graphs.knn_graph import KNNGraphBuilder
 from stat_arb.clustering.sponge import SPONGEClustering
@@ -123,12 +123,8 @@ def _run_single_config(excess_returns, prices, volumes, eth_data, universe_mask,
     def signal_func(train_returns, test_dates, full_returns, **kwargs):
         rebalance_date = test_dates[0]
 
-        # Universe filtering
-        if rebalance_date in universe_mask.index:
-            current_univ = universe_mask.loc[rebalance_date]
-        else:
-            prior_dates = universe_mask.index[universe_mask.index <= rebalance_date]
-            current_univ = universe_mask.loc[prior_dates[-1]] if len(prior_dates) > 0 else universe_mask.iloc[0]
+        # Universe as known before the first traded day
+        current_univ = membership_before(universe_mask, rebalance_date)
 
         valid_return_cols = [col for col in train_returns.columns
                            if return_cols_to_tokens.get(col, '') in current_univ.index
@@ -305,11 +301,7 @@ def run_strategy2_test(H=5, L=20, cost_bps=50, verbose=True):
     def signal_func(train_returns, test_dates, full_returns, **kwargs):
         rebalance_date = test_dates[0]
 
-        if rebalance_date in universe_mask.index:
-            current_univ = universe_mask.loc[rebalance_date]
-        else:
-            prior_dates = universe_mask.index[universe_mask.index <= rebalance_date]
-            current_univ = universe_mask.loc[prior_dates[-1]] if len(prior_dates) > 0 else universe_mask.iloc[0]
+        current_univ = membership_before(universe_mask, rebalance_date)
 
         valid_return_cols = [col for col in train_returns.columns
                            if return_cols_to_tokens.get(col, '') in current_univ.index

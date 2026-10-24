@@ -106,3 +106,41 @@ def test_cluster_deviation_untraded_names_stay_at_zero():
     # selected names trade, and the book is dollar-neutral
     assert (weights['aaa_returns'] > 0.0).all()
     assert np.allclose(weights.sum(axis=1), 0.0, atol=1e-12)
+
+
+def test_zscore_vol_weighting_never_flips_a_position():
+    """Vol scaling then demeaning used to turn a selected long into a short.
+
+    Two longs and one short in a cluster, with one long far more volatile than
+    the other: its inverse-vol weight is tiny, and subtracting the mean of the
+    traded weights pushed it below zero. Every held position must keep the sign
+    its signal asked for, and each cluster must stay dollar-neutral.
+    """
+    cols = ['a_returns', 'b_returns', 'c_returns', 'd_returns']
+    labels = np.array([0, 0, 0, 0])
+    idx = pd.date_range('2024-01-01', periods=40, freq='D')
+    rng = np.random.default_rng(0)
+    vols = [0.30, 0.005, 0.02, 0.02]          # 'a' is sixty times as volatile as 'b'
+    returns = pd.DataFrame(rng.normal(0, 1, (40, 4)) * vols, index=idx, columns=cols)
+    signals = pd.DataFrame([[-2.5, -2.4, 2.5, 0.0]] * 40, index=idx, columns=cols)
+    strat = ZScoreStrategy(entry_threshold=2.0, use_threshold=True)
+    w = strat.generate_target_weights(signals=signals, cluster_labels=labels,
+                                      tokens=['a', 'b', 'c', 'd'], returns=returns)
+    live = w.iloc[15:]
+    assert (live['a_returns'] >= 0).all() and (live['b_returns'] > 0).all()
+    assert (live['c_returns'] < 0).all()
+    assert (live['d_returns'] == 0).all()
+    assert np.allclose(live.sum(axis=1), 0.0, atol=1e-12)
+
+
+def test_zscore_one_sided_cluster_stays_flat():
+    """A cluster with only longs selected cannot be neutral without inventing a short."""
+    cols = ['a_returns', 'b_returns', 'c_returns']
+    idx = pd.date_range('2024-01-01', periods=30, freq='D')
+    returns = pd.DataFrame(np.random.default_rng(1).normal(0, 0.02, (30, 3)),
+                           index=idx, columns=cols)
+    signals = pd.DataFrame([[-2.5, -2.4, 0.0]] * 30, index=idx, columns=cols)
+    strat = ZScoreStrategy(entry_threshold=2.0, use_threshold=True)
+    w = strat.generate_target_weights(signals=signals, cluster_labels=np.array([0, 0, 0]),
+                                      tokens=['a', 'b', 'c'], returns=returns)
+    assert (w == 0.0).all().all()

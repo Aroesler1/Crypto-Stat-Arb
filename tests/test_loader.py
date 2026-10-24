@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -78,3 +79,22 @@ def test_column_order_survives_a_different_process_hash_seed(tmp_path):
 
     assert len(orders) == 1, f"column order varies with the hash seed: {orders}"
     assert orders.pop() == ",".join(sorted(TOKENS))
+
+
+def test_raw_panel_can_live_outside_the_repository(tmp_path, monkeypatch):
+    """The raw CMC panel is not distributed; the loader finds it via the env var."""
+    repo_data = tmp_path / "repo_data"
+    raw_home = tmp_path / "raw_home"
+    repo_data.mkdir()
+    raw_home.mkdir()
+    _fixture_dir(repo_data)
+    (repo_data / "all_tokens_24mo_daily.csv").rename(raw_home / "all_tokens_24mo_daily.csv")
+
+    monkeypatch.delenv("STAT_ARB_RAW_DATA_DIR", raising=False)
+    with pytest.raises(FileNotFoundError, match="STAT_ARB_RAW_DATA_DIR"):
+        DataLoader(str(repo_data)).get_aligned_data()
+
+    monkeypatch.setenv("STAT_ARB_RAW_DATA_DIR", str(raw_home))
+    _, prices, _, _ = DataLoader(str(repo_data)).get_aligned_data()
+    assert list(prices.columns) == sorted(TOKENS)
+

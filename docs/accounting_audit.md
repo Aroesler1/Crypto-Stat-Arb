@@ -15,9 +15,9 @@ The default rejects missing held returns. Frozen historical replications explici
 
 ## Fixed measured replication
 
-Three historical brackets by two pre-existing signals were chosen before the correction run, without optimizing the new results. `run_accounting_audit.py` rebuilds them from the existing cached panel; --check uses only committed portfolio-level CSVs. The B3 baseline fails on 2017-12-08 and B3 EWMA on 2020-03-14 at 50 bps. These failures concern this ledger and spot-price proxy, not a reconstruction of actual exchange liquidation. The B1/B2 surviving results and missing exposure are listed side by side with historical scores. No new multiple-testing-adjusted discovery is claimed.
+Three historical brackets by two pre-existing signals were chosen before the correction run, without optimizing the new results. `run_accounting_audit.py` rebuilds them from the existing cached panel; --check uses only committed portfolio-level CSVs. The B3 baseline fails on 2017-12-08 and B3 EWMA on 2020-12-28 at 50 bps (2020-03-14 before the EWMA arm's entry threshold was aligned with the baseline's on 2026-10-23; see audit_history.md). These failures concern this ledger and spot-price proxy, not a reconstruction of actual exchange liquidation. The B1/B2 surviving results and missing exposure are listed side by side with historical scores. No new multiple-testing-adjusted discovery is claimed.
 
-The existing eight-arm DSR is not the denominator for the cumulative reference, method and parameter search. Static exchange matches do not establish historical contract dates or borrow availability. The availability review remains applicable. Licence wording was not changed without the separately requested approval.
+The existing eight-arm DSR is not the denominator for the cumulative reference, method and parameter search. Static exchange matches do not establish historical contract dates or borrow availability. The availability review remains applicable.
 
 ## Literature-led next experiments
 

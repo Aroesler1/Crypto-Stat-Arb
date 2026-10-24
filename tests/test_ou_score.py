@@ -155,9 +155,10 @@ def test_ou_weights_are_dollar_neutral_within_each_cluster():
     assert traded.sum(axis=1).abs().max() < 1e-8
     # each traded cluster contributes gross 1.0; the runner rescales the book
     # to its leverage target afterwards
-    assert traded.abs().sum(axis=1).max() == pytest.approx(2.0, abs=1e-8)
     for cluster in (0, 1):
         cols = [c for c, lab in zip(w.columns, labels) if lab == cluster]
+        gross = traded[cols].abs().sum(axis=1)
+        assert np.allclose(gross[gross > 0], 1.0, atol=1e-8)
         assert traded[cols].sum(axis=1).abs().max() < 1e-8
 
 
@@ -285,3 +286,24 @@ def test_between_cluster_weights_are_dollar_neutral():
     traded = w.loc[w.abs().sum(axis=1) > 0]
     assert len(traded) > 0
     assert traded.sum(axis=1).abs().max() < 1e-8
+
+
+def test_ou_never_opens_positions_inside_the_band():
+    """Demeaning across the whole cluster used to put weight on in-band names.
+
+    With s = [-2, +2, 0.5, NaN] and an entry threshold of 1.5, only the first
+    two names qualify. The in-band name and the name with no score must hold
+    exactly zero, and a cluster where only one side qualifies stays flat.
+    """
+    cols = ["A_returns", "B_returns", "C_returns", "D_returns"]
+    idx = pd.date_range("2024-01-01", periods=2, freq="D")
+    labels, tokens = np.array([0, 0, 0, 0]), ["A", "B", "C", "D"]
+    strat = OUScoreStrategy(window=60, entry_threshold=1.5)
+
+    s = pd.DataFrame([[-2.0, 2.0, 0.5, np.nan]] * 2, index=idx, columns=cols)
+    w = strat.generate_target_weights(s, labels, tokens)
+    assert (w["C_returns"] == 0).all() and (w["D_returns"] == 0).all()
+    assert (w["A_returns"] == 0.5).all() and (w["B_returns"] == -0.5).all()
+
+    one_sided = pd.DataFrame([[-2.0, 0.0, 0.0, 0.0]] * 2, index=idx, columns=cols)
+    assert (strat.generate_target_weights(one_sided, labels, tokens) == 0).all().all()

@@ -16,9 +16,13 @@ from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
+# repo root on the path so `python stat_arb/run_phase1.py` resolves the package
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 # Import local modules
 from stat_arb.data.loader import DataLoader
-from stat_arb.data.universe import UniverseManager
+from stat_arb.data.universe import UniverseManager, membership_before
 from stat_arb.pca.market_mode import MarketModeExtractor
 from stat_arb.graphs.knn_graph import KNNGraphBuilder
 from stat_arb.clustering.sponge import SPONGEClustering
@@ -100,16 +104,9 @@ def run_phase1(H=5, L=60, cost_bps=50, verbose=True):
         # Get rebalance date (first day of test period)
         rebalance_date = test_dates[0]
 
-        # Get universe at rebalance date
-        if rebalance_date in universe_mask.index:
-            current_univ = universe_mask.loc[rebalance_date]
-        else:
-            # Fallback to closest prior date
-            prior_dates = universe_mask.index[universe_mask.index <= rebalance_date]
-            if len(prior_dates) > 0:
-                current_univ = universe_mask.loc[prior_dates[-1]]
-            else:
-                current_univ = universe_mask.iloc[0]
+        # universe as known before the first traded day: the mask row for the
+        # rebalance date itself uses that day's close and volume
+        current_univ = membership_before(universe_mask, rebalance_date)
 
         # Get valid columns (in universe)
         valid_return_cols = [col for col in train_returns.columns

@@ -33,13 +33,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from stat_arb.data.loader import DataLoader
-from stat_arb.data.universe import UniverseManager
+from stat_arb.data.universe import UniverseManager, membership_before
 from stat_arb.pca.market_mode import MarketModeExtractor
 from stat_arb.graphs.knn_graph import KNNGraphBuilder
 from stat_arb.clustering.sponge import SPONGEClustering
 from stat_arb.signals.cluster_deviation import ClusterDeviationStrategy
 from stat_arb.backtest.engine import BacktestEngine
-from stat_arb.backtest.holdings import replay_holdings, simple_from_excess_log
+from stat_arb.backtest.holdings import InsolvencyError, replay_holdings, simple_from_excess_log
 from stat_arb.backtest.walk_forward import WalkForwardBacktest, WalkForwardConfig
 from stat_arb.backtest.costs import TransactionCostModel
 from stat_arb.backtest.statistics import deflated_sharpe_ratio, per_period_sharpe
@@ -99,10 +99,16 @@ def default_clusterer(adj, n_clusters):
     return sponge.labels_
 
 
+# entry threshold of the published signal; signal-ablation arms reuse it so an
+# arm differs from the baseline only in the thing it is testing
+BASELINE_ENTRY_THRESHOLD = 1.5
+
+
 def default_strategy(H, L):
     """The published signal: cluster deviation with an equal-weighted composite."""
     return ClusterDeviationStrategy(lookback=H, zscore_window=L,
-                                    entry_threshold=1.5, composite_type='equal')
+                                    entry_threshold=BASELINE_ENTRY_THRESHOLD,
+                                    composite_type='equal')
 
 
 def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
@@ -160,10 +166,9 @@ def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
 
         # Membership inputs include daily closing prices and volume. Only an
         # observation strictly before the first earned return is available.
-        prior_dates = universe_mask.index[universe_mask.index < rebalance_date]
-        if len(prior_dates) == 0:
+        if not (universe_mask.index < rebalance_date).any():
             return pd.DataFrame(0.0, index=test_dates, columns=full_returns.columns)
-        current_univ = universe_mask.loc[prior_dates[-1]].fillna(False)
+        current_univ = membership_before(universe_mask, rebalance_date)
 
         valid_return_cols = [col for col in train_returns.columns
                              if return_cols_to_tokens.get(col, '') in current_univ.index
@@ -290,10 +295,16 @@ def run_phase3_config(excess_returns, universe_mask, H=5, L=20,
     # from one fixed-weight path is not an exact threshold for this ledger.
     out['breakeven'] = np.nan
     if funding_rates is not None:
-        funded = replay_holdings(weights, asset_returns, cost_bps=50,
-                                 funding_rates=funding_rates, **settings)
-        out['funded_ledger'] = funded.daily
-        out['funded_weights'] = funded.weights
+        try:
+            funded = replay_holdings(weights, asset_returns, cost_bps=50,
+                                     funding_rates=funding_rates, **settings)
+        except InsolvencyError as exc:
+            # funding can bankrupt a book the unfunded ledger survives; keep
+            # the unfunded result and report the funded failure separately
+            out['funded_insolvency'] = exc
+        else:
+            out['funded_ledger'] = funded.daily
+            out['funded_weights'] = funded.weights
 
     return out
 

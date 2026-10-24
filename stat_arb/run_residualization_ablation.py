@@ -120,8 +120,14 @@ def load_inputs(panel_path: Path, data_dir: Path, start: pd.Timestamp,
 
 
 def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index,
-            clusterer=None, **config_kwargs):
+            clusterer=None, record_insolvency=False, **config_kwargs):
     """One ablation arm on one bracket. Returns stats plus the diagnostics.
+
+    An insolvent book raises `InsolvencyError` by default. With
+    `record_insolvency=True` it instead returns a row with ``status`` set to
+    "insolvent", the failure date and terminal equity, the clustering
+    diagnostics gathered before the failure, and no performance statistics, so
+    a results table shows the failure instead of silently dropping the arm.
 
     `clusterer` defaults to the published SPONGE k=3 path. The clustering-method
     sweep passes its own, which is why this takes one rather than hard-coding
@@ -164,28 +170,54 @@ def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index,
     if mask.to_numpy().sum() == 0:
         return None
 
+    from stat_arb.backtest.holdings import InsolvencyError
     diagnostics: list[dict] = []
-    result = run_phase3_config(returns, mask, weight_band=BEST_BAND,
-                               trade_frequency_days=BEST_FREQ,
-                               n_pca_components=n_pca, diagnostics=diagnostics,
-                               clusterer=clusterer, asset_returns=asset_returns,
-                               missing_returns="stale_mark", **config_kwargs)
-    if result is None:
-        return None
+    try:
+        result = run_phase3_config(returns, mask, weight_band=BEST_BAND,
+                                   trade_frequency_days=BEST_FREQ,
+                                   n_pca_components=n_pca, diagnostics=diagnostics,
+                                   clusterer=clusterer, asset_returns=asset_returns,
+                                   missing_returns="stale_mark", **config_kwargs)
+    except InsolvencyError as exc:
+        if not record_insolvency:
+            raise
+        result, failure = None, exc
+    else:
+        failure = None
+        if result is None:
+            return None
 
     d = pd.DataFrame([{k: v for k, v in x.items() if k not in ("labels", "assets")}
                       for x in diagnostics])
-    stats = {
+    structure = {
         "avg_members": float(mask.sum(axis=1).mean()),
         "var_removed": float(d["variance_removed"].mean()) if len(d) else np.nan,
         "density": float(d["graph_density"].mean()) if len(d) else np.nan,
         "neg_edge_share": float(d["negative_edge_share"].mean()) if len(d) else np.nan,
         "stability_ari": cluster_stability(diagnostics),
+        "n_rebalances": len(diagnostics),
+    }
+    if failure is not None:
+        # performance is undefined for a book that ran out of equity; report
+        # where and when it failed instead of a Sharpe over a truncated path
+        return {**structure, "status": "insolvent",
+                "failure_date": str(failure.date.date()),
+                "terminal_equity": float(failure.equity),
+                "n_days": len(failure.daily),
+                "gross_sharpe": np.nan, "net_sharpe": np.nan, "breakeven_bps": np.nan,
+                "turnover": float(failure.daily["turnover"].mean()), "psr": np.nan,
+                "missing_return_exposure_share": float(
+                    failure.daily.missing_return_exposure.sum() /
+                    max(failure.daily.gross_exposure.sum(), 1e-15)),
+                "net_series": None, "net_series_for_funding": None, "weights": None}
+
+    stats = {
+        **structure,
+        "status": "ok",
         "gross_sharpe": annualized_sharpe(result["gross_returns"]),
         "net_sharpe": annualized_sharpe(result["net_50"]),
         "breakeven_bps": result["breakeven"],
         "turnover": float(result["turnover"].mean()),
-        "n_rebalances": len(diagnostics),
         # PSR on the net series: the probability the true Sharpe clears zero,
         # given this sample's length, skew and kurtosis. Reported on net rather
         # than gross because a gross PSR flatters a book nobody can trade.
@@ -204,6 +236,14 @@ def run_arm(close, volume, table, refs, reference, n_pca, member_mask, index,
         funded = result["funded_ledger"]
         stats.update(funding_ann=float(funded.funding_return.mean()) * 365,
                      net_sharpe_after_funding=annualized_sharpe(funded.net_return),
+                     funding_coverage_exposure=float(funded.funding_covered_exposure.sum() /
+                         max(funded.gross_exposure.sum(), 1e-15)))
+    if "funded_insolvency" in result:
+        exc = result["funded_insolvency"]
+        funded = exc.daily
+        stats.update(funding_ann=float(funded.funding_return.mean()) * 365,
+                     net_sharpe_after_funding=np.nan,
+                     funded_failure_date=str(exc.date.date()),
                      funding_coverage_exposure=float(funded.funding_covered_exposure.sum() /
                          max(funded.gross_exposure.sum(), 1e-15)))
     return stats
@@ -248,10 +288,13 @@ def main(argv: list[str] | None = None) -> int:
                     member[c] = False
         for label, reference, n_pca in ARMS:
             print(f"  {bracket} / {label} ...", flush=True)
-            stats = run_arm(close, volume, table, refs, reference, n_pca, member, index)
+            stats = run_arm(close, volume, table, refs, reference, n_pca, member, index,
+                            record_insolvency=True)
             if stats is None:
                 print("    produced no positions, skipped")
                 continue
+            if stats["status"] == "insolvent":
+                print(f"    insolvent on {stats['failure_date']}")
             for _k in ("net_series", "net_series_for_funding", "weights"):
                 stats.pop(_k, None)
             stats.update(bracket=bracket, arm=label, reference=reference,
@@ -278,11 +321,12 @@ def main(argv: list[str] | None = None) -> int:
                   f"{100 * r['neg_edge_share']:4.0f}  {r['stability_ari']:9.3f}  "
                   f"{r['gross_sharpe']:5.2f}  {r['net_sharpe']:5.2f}  "
                   f"{r['breakeven_bps']:7.0f}")
-        best = sub.loc[sub["net_sharpe"].idxmax()]
-        print(f"    best net Sharpe for {bracket}: {best['arm']} "
-              f"({best['net_sharpe']:.2f})")
+        if sub["net_sharpe"].notna().any():
+            best = sub.loc[sub["net_sharpe"].idxmax()]
+            print(f"    best net Sharpe for {bracket}: {best['arm']} "
+                  f"({best['net_sharpe']:.2f})")
 
-    print(f"\nsaved -> {out_dir / f'residualization_ablation_{args.treatment}.csv'}")
+    print(f"\nsaved -> {out_dir / f'residualization_ablation_{args.treatment}_corrected.csv'}")
     return 0
 
 

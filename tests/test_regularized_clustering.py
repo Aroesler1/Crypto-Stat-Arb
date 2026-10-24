@@ -19,8 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from stat_arb.clustering.k_selection import signflip_parallel_analysis  # noqa: E402
 from stat_arb.clustering.regularized import (  # noqa: E402
     PowerMeanLaplacianClustering, RegularizedSPONGEClustering,
-    RegularizedSignedSpectralClustering, default_gamma, power_mean,
+    RegularizedSignedSpectralClustering, default_gamma, power_mean, power_mean_shift,
 )
+from stat_arb.graphs.knn_graph import KNNGraphBuilder  # noqa: E402
 
 METHODS = (RegularizedSignedSpectralClustering, RegularizedSPONGEClustering,
            PowerMeanLaplacianClustering)
@@ -223,3 +224,28 @@ def test_signflip_respects_max_k():
 def test_signflip_handles_a_tiny_graph():
     est, _, _ = signflip_parallel_analysis(np.zeros((2, 2)), n_replicates=5)
     assert est == 2
+
+
+def test_power_mean_shift_follows_the_paper():
+    """eps = log10(1 + |p|) + 1e-6 for p < 0 (Mercado, Tudisco, Hein 2019)."""
+    assert power_mean_shift(-10.0) == pytest.approx(np.log10(11.0) + 1e-6)
+    assert power_mean_shift(0.0) == 0.0 and power_mean_shift(1.0) == 0.0
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3, 4])
+def test_negative_power_recovers_blocks_on_a_sparse_knn_graph(seed):
+    """Without the diagonal shift p = -10 collapsed to chance on k-NN graphs.
+
+    A sparse k-NN graph gives each layer zero eigenvalues; floored at 1e-8 and
+    raised to -10 they swamp the spectrum, and the clustering scored an ARI
+    near 0 on planted factor blocks that p = 0 and p = 1 recover easily.
+    """
+    rng = np.random.default_rng(seed)
+    n, k, t = 90, 3, 400
+    truth = np.repeat(np.arange(k), n // k)
+    f = rng.normal(size=(t, k))
+    f[:, 1] = -0.9 * f[:, 0] + 0.44 * f[:, 1]      # two opposed blocks
+    x = f[:, truth] * 0.25 + rng.normal(size=(t, n))
+    adj = KNNGraphBuilder(k=10).build_weighted_knn(pd.DataFrame(x).corr())
+    labels = PowerMeanLaplacianClustering(n_clusters=k, p=-10.0).fit_predict(adj, k)
+    assert adjusted_rand_score(truth, labels) > 0.8

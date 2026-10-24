@@ -1,5 +1,12 @@
 # Stat-Arb Backtest: Final Report
 
+> **Status: historical.** This report covers the first backtest on the 174-token
+> CoinMarketCap snapshot (May 2023 to May 2025, survivors only), scored with
+> the retired weighted log-return accounting. Its Sharpe ratios are not capital
+> returns and did not survive the point-in-time universe. Current results are
+> in the [README](../../README.md); the full record is in
+> [docs/audit_history.md](../../docs/audit_history.md).
+
 ## 2026-08 Revision (supersedes the figures below)
 
 All results were regenerated after a signal-integrity pass. Fixes, each with a
@@ -13,20 +20,24 @@ regression test in `tests/`:
 
 ### Regenerated headline results (walk-forward OOS, 2024-05-30 to 2025-05-28)
 
+Rerun on 2026-10-23 after two further fixes (z-score weights no longer flip
+sign when vol-scaled, and phases 1 and 2 use universe membership from before
+the rebalance day); the earlier values are in `docs/audit_history.md`.
+
 Phase 1 baseline (SPONGE k=3, z-score MR, H=5, L=60):
-- Gross Sharpe **1.67**, net Sharpe @ 50 bps **-2.16**, break-even cost **21.0 bps**
-- PSR 0.02, DSR 0.00, avg daily turnover 23%, max drawdown -27.7%
+- Gross Sharpe **1.65**, net Sharpe @ 50 bps **-2.21**, break-even cost **21.0 bps**
+- PSR 0.015, DSR 0.00, avg daily turnover 23%, max drawdown -27.9%
 
 Phase 2 sweep (16 configurations):
-- Best gross: SPONGE k=6 z-score MR, gross Sharpe **4.22**, net @ 50 bps **-1.21**, DSR 0.00
-- Best net: Cluster Deviation SPONGE k=3, gross **3.10**, net @ 50 bps **0.01**, break-even **50.3 bps**, DSR **0.09**
+- Best gross: BNC k=6 z-score MR, gross Sharpe **4.27**, net @ 50 bps **-1.30**, DSR 0.01
+- Best net: Cluster Deviation SPONGE k=3, gross **3.25**, net @ 50 bps **0.14**, break-even **52.2 bps**, DSR **0.14**
 
 ### Honest conclusion (phases 1-2)
 
 The clustering signal carries real gross structure (positive gross Sharpe in
 all 16 configurations), but under DAILY rebalancing no configuration survives
 realistic crypto taker costs plus financing carry, and the deflated Sharpe of
-the best net configuration (0.09) says the selected result is
+the best net configuration (0.14) says the selected result is
 indistinguishable from the best of 16 noise strategies. The prior version of
 this report overstated gross Sharpe (2.7-3.3 in the headline configs) due to
 fixes 1-2.
@@ -170,12 +181,12 @@ now implements the symmetrically normalized form of Cucuringu et al.
 
 | Rank | Method | k | Gross SR | Net SR @50bps | Break-even |
 |------|--------|---|----------|---------------|------------|
-| 1 | BNC | 6 | 4.21 | -1.34 | 37.6 bps |
-| 2 | SPONGE | 6 | 3.71 | -1.88 | 32.7 bps |
-| 3 | BNC | 5 | 3.49 | -1.72 | 33.7 bps |
-| 4 | BNC | 3 | 3.38 | -1.68 | 32.7 bps |
-| 5 | SignedSpectral | 6 | 3.29 | -2.40 | 28.8 bps |
-| 6 | SPONGE | 3 (Cluster Dev) | 3.25 | **+0.15** | **52.2 bps** |
+| 1 | BNC | 6 | 4.27 | -1.30 | 38.6 bps |
+| 2 | SPONGE | 6 | 3.74 | -1.89 | 32.7 bps |
+| 3 | BNC | 5 | 3.55 | -1.66 | 33.7 bps |
+| 4 | BNC | 3 | 3.34 | -1.74 | 32.7 bps |
+| 5 | SignedSpectral | 6 | 3.25 | -2.52 | 27.8 bps |
+| 6 | SPONGE | 3 (Cluster Dev) | 3.25 | **+0.14** | **52.2 bps** |
 
 The conclusion the sweep is used for does not change, and is if anything
 sharper: of all sixteen configurations, exactly one has a positive net Sharpe
@@ -203,7 +214,7 @@ turnover artifact, not an edge.
 ## Key Findings
 
 1. **All clustering methods produce positive gross alpha** (Sharpe 2-4+)
-2. **BNC k=6 has the highest gross Sharpe (4.21)** but a net Sharpe of -1.34.
+2. **BNC k=6 has the highest gross Sharpe (4.27)** but a net Sharpe of -1.30.
    Only one configuration in the sweep is net positive at 50 bps
 3. **Strategy 2 (Cluster Deviation) is most robust to costs** with 54.2 bps break-even
 4. **At realistic execution costs (25-30 bps), Strategy 2 achieves Sharpe 1.45-1.76**
@@ -217,12 +228,6 @@ turnover artifact, not an edge.
 - Break-even costs range from 23-54 bps depending on configuration
 - Strategy 2's higher break-even provides implementation buffer
 - Turnover ~23-28% daily is manageable for liquid low-cap tokens
-
----
-
-## Resume-Ready Bullet
-
-> **Executed low-cap crypto stat-arb using signed k-NN correlation graph, SPONGE/BNC/signed spectral clustering, and PCA market-mode removal; daily walk-forward OOS May 2024 - May 2025. Best configuration (Cluster Deviation strategy, SPONGE k=3) achieved 29.2% CAGR, 1.76 Sharpe, -23.9% max drawdown, and 27.5% avg daily turnover net of 25 bps/side costs with ETH/PC1 beta ~0.02/0.00.**
 
 ---
 

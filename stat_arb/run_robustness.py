@@ -166,7 +166,7 @@ def main() -> int:
         verdict = "SURVIVES" if row["breakeven_bias"] > PUBLISHED_VW_BIAS else "does not survive"
         print(f"  {tier:<26s} breakeven bias {row['breakeven_bias']:6.1%}  "
               f"vs VW {PUBLISHED_VW_BIAS:.2%} -> {verdict}")
-    print(f"\nsaved -> {out_dir / 'survivorship_robustness.csv'}")
+    print(f"\nsaved -> {out_dir / 'survivorship_robustness_corrected.csv'}")
     return 0
 
 

@@ -43,7 +43,10 @@ from stat_arb.data import daily_listings as D  # noqa: E402
 from stat_arb.factors import characteristics as C  # noqa: E402
 from stat_arb.factors import portfolios as PF  # noqa: E402
 from stat_arb.run_residualization_ablation import load_inputs, run_arm  # noqa: E402
-from stat_arb.run_signal_ablation import BEST_REFERENCE, arm_kwargs  # noqa: E402
+from stat_arb.run_signal_ablation import (  # noqa: E402
+    BEST_REFERENCE, arm_kwargs, build_death_filter,
+)
+from stat_arb.run_tradability import best_arms_from_ablation  # noqa: E402
 
 ACADEMIC_RANK_HI = 1000
 ACADEMIC_MIN_MCAP = 1_000_000
@@ -132,7 +135,9 @@ def main(argv: list[str] | None = None) -> int:
 
     market = pd.Series(np.log(refs["vw_market"] / refs["vw_market"].shift(1)),
                        index=index).fillna(0.0)
-    simple = close.where(close > 0).pct_change()
+    # no filling across missing prices: a return is only measured between two
+    # observed closes (pandas 3 default; explicit so pandas 2 gives the same)
+    simple = close.where(close > 0).pct_change(fill_method=None)
     # scrub the same artifacts the return panel scrubs, so the factor table and
     # the strategy see the same data
     log_r = np.log1p(simple.where(simple > -1))
@@ -214,13 +219,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- (a) the bracket books on the factors ------------------------------
     if not args.skip_books:
-        abl_path = out_dir / "signal_ablation.csv"
-        best_arm = {}
-        if abl_path.exists():
-            abl = pd.read_csv(abl_path)
-            pit = abl[abl["treatment"] == "pit"]
-            for bracket, g in pit.groupby("bracket"):
-                best_arm[bracket] = g.loc[g["net_sharpe"].idxmax(), "arm"]
+        best_arm = best_arms_from_ablation(out_dir)
+        death_filter = None
+        if "death" in best_arm.values():
+            death_filter = build_death_filter(panel_path, table, close, verbose=False)
 
         factor_weekly = all_series["pit"][[f for f in BOOK_FACTORS
                                            if f in all_series["pit"].columns]]
@@ -235,14 +237,20 @@ def main(argv: list[str] | None = None) -> int:
                   flush=True)
             stats = run_arm(close, volume, table, refs,
                             BEST_REFERENCE.get(bracket, "eth"), 0, member, index,
-                            **arm_kwargs(arm, None))
+                            record_insolvency=True, **arm_kwargs(arm, death_filter))
             if stats is None:
+                continue
+            if stats["status"] == "insolvent":
+                # no full-period return series to regress
+                print(f"    insolvent on {stats['failure_date']}; not regressed")
+                rows.append({"bracket": bracket, "arm": arm, "status": "insolvent",
+                             "failure_date": stats["failure_date"]})
                 continue
             daily = stats["net_series_for_funding"]
             weekly = (1.0 + daily.fillna(0.0)).resample("W-MON").prod() - 1.0
             res = ols(weekly, factor_weekly)
             if res:
-                res.update(bracket=bracket, arm=arm)
+                res.update(bracket=bracket, arm=arm, status="ok")
                 rows.append(res)
 
         if rows:

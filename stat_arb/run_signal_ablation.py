@@ -47,7 +47,7 @@ from stat_arb.signals.ou_score import (  # noqa: E402
     BetaAdjustedDeviation, ClusterMomentumOverlay, OUScoreStrategy,
     ewma_zscore, half_life_position_scale, s_scores,
 )
-from stat_arb.run_phase3 import annualized_sharpe  # noqa: E402
+from stat_arb.run_phase3 import BASELINE_ENTRY_THRESHOLD, annualized_sharpe  # noqa: E402
 
 PERIODS_PER_YEAR = 365
 
@@ -88,7 +88,7 @@ class EWMAClusterDeviation(ClusterDeviationStrategy):
 
     This arm changes the STANDARDISATION and nothing else. It does not size by
     half-life; `EWMASizedClusterDeviation` below does that, and the two run as
-    separate arms so the table can say which half of the brief's item (c) pays.
+    separate arms so the table can say which half of the EWMA change pays.
 
     A 20-day rolling standard deviation steps discontinuously every time a large
     move enters or leaves the window, and on a micro-cap panel that step is
@@ -96,8 +96,12 @@ class EWMAClusterDeviation(ClusterDeviationStrategy):
     decays instead of dropping.
     """
 
-    def __init__(self, lookback=5, zscore_window=20, halflife=10.0, **kw):
-        super().__init__(lookback=lookback, zscore_window=zscore_window, **kw)
+    def __init__(self, lookback=5, zscore_window=20, halflife=10.0,
+                 entry_threshold=BASELINE_ENTRY_THRESHOLD, **kw):
+        # same entry threshold as the baseline, so the arm changes only the
+        # standardisation (the parent class default of 2.0 used to leak in)
+        super().__init__(lookback=lookback, zscore_window=zscore_window,
+                         entry_threshold=entry_threshold, **kw)
         self.halflife = halflife
 
     def compute_signals(self, returns, cluster_labels, tokens, lag=1):
@@ -110,14 +114,15 @@ class EWMAClusterDeviation(ClusterDeviationStrategy):
             if len(cols) < 2:
                 continue
             dev[cols] = returns[cols].sub(returns[cols].mean(axis=1), axis=0)
-        cumulative = dev.rolling(self.lookback, min_periods=2).sum()
+        # same cumulative deviation as ClusterDeviationStrategy.compute_signals
+        cumulative = dev.rolling(self.lookback, min_periods=1).sum()
         return ewma_zscore(cumulative, halflife=self.halflife).shift(lag)
 
 
 class EWMASizedClusterDeviation(EWMAClusterDeviation):
     """EWMA standardisation PLUS position size proportional to signal half-life.
 
-    Completes the brief's item (c): a signal expected to revert in a day is
+    Completes the EWMA ablation: a signal expected to revert in a day is
     worth more per unit of z-score than one expected to take a week, because the
     book only holds it for the rebalance interval. Half-lives come from the same
     OU fit the s-score arm uses, so the two arms are measuring the same
@@ -179,7 +184,9 @@ def make_death_filter(death_probs: pd.DataFrame, cols_to_id: dict,
                                    values="death_prob", aggfunc="last")
 
     def filt(weights, assets, dates):
-        idx = wide.index[wide.index <= dates[0]]
+        # strictly before the first traded day: a score dated dates[0] uses that
+        # day's close, which the book does not know when it trades into it
+        idx = wide.index[wide.index < dates[0]]
         if len(idx) == 0:
             return weights
         latest = pd.to_numeric(wide.loc[idx[-1]], errors="coerce").dropna()
@@ -197,6 +204,39 @@ def make_death_filter(death_probs: pd.DataFrame, cols_to_id: dict,
         return out
 
     return filt
+
+
+def build_death_filter(panel_path, table: pd.DataFrame, close: pd.DataFrame,
+                       out_dir: Path | None = None, verbose: bool = True):
+    """Fit the walk-forward death classifier and return the long-leg gate.
+
+    Trains on 7-day common-grid rows (purged at each year boundary) and scores
+    every token on every day, so the gate sees the whole cross-section at each
+    rebalance. Writes the per-year AUC and coefficient tables to `out_dir` when
+    given. Shared by the signal ablation, tradability and factor runners so the
+    `death` arm means the same thing in each.
+    """
+    raw = pd.read_parquet(panel_path)
+    raw["date"] = pd.to_datetime(raw["date"])
+    raw = raw[raw["cmc_id"].isin(set(table["cmc_id"].astype(int)))]
+    train_features = DM.build_features(raw, table, sample_every=7)
+    metrics, coefs = DM.walk_forward_auc(train_features)
+    if verbose:
+        scored = metrics[~metrics["skipped"]]
+        print(metrics.to_string(index=False))
+        if len(scored):
+            print(f"  mean out-of-sample AUC {scored['auc'].mean():.3f} "
+                  f"over {len(scored)} years")
+        print("  standardised coefficients by year:")
+        print(coefs.to_string(index=False))
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        metrics.to_csv(out_dir / "death_classifier_auc_corrected.csv", index=False)
+        coefs.to_csv(out_dir / "death_classifier_coefficients_corrected.csv", index=False)
+    daily_features = DM.build_features(raw, table, sample_every=1)
+    probs = DM.death_probabilities(train_features, score_features=daily_features)
+    cols_to_id = {f"{int(c)}_returns": int(c) for c in close.columns}
+    return make_death_filter(probs, cols_to_id)
 
 
 def sharpe_by_year(net: pd.Series) -> dict[int, float]:
@@ -230,6 +270,13 @@ def best_days_stats(net: pd.Series, k: int = N_BEST_DAYS) -> dict:
                            if rest.std(ddof=1) > 0 else np.nan),
         "best_days_share": (float(r.loc[best].sum() / total) if total != 0 else np.nan),
     }
+
+
+def insolvent_robustness_row(stats: dict, **meta) -> dict:
+    """Robustness row for a book that ran out of equity: no Sharpe, just when."""
+    return dict(meta, status="insolvent", failure_date=stats["failure_date"],
+                net_sharpe=np.nan, sharpe_ex_best=np.nan, best_days_share=np.nan,
+                turnover=float(stats["turnover"]), n_days=int(stats["n_days"]))
 
 
 def robustness_row(net: pd.Series, turnover: float, **meta) -> dict:
@@ -308,25 +355,8 @@ def main(argv: list[str] | None = None) -> int:
     death_filter = None
     if "death" in arms:
         print("fitting the death classifier walk-forward ...", flush=True)
-        raw = pd.read_parquet(panel_path)
-        raw["date"] = pd.to_datetime(raw["date"])
-        raw = raw[raw["cmc_id"].isin(set(table["cmc_id"].astype(int)))]
-        features = DM.build_features(raw, table, sample_every=7)
-        metrics, coefs = DM.walk_forward_auc(features)
-        scored = metrics[~metrics["skipped"]]
-        print(metrics.to_string(index=False))
-        if len(scored):
-            print(f"  mean out-of-sample AUC {scored['auc'].mean():.3f} "
-                  f"over {len(scored)} years")
-        print("  standardised coefficients by year:")
-        print(coefs.to_string(index=False))
-        out_dir = root / "stat_arb" / "reporting" / "brackets"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        metrics.to_csv(out_dir / "death_classifier_auc_corrected.csv", index=False)
-        coefs.to_csv(out_dir / "death_classifier_coefficients_corrected.csv", index=False)
-        probs = DM.death_probabilities(features)
-        cols_to_id = {f"{int(c)}_returns": int(c) for c in close.columns}
-        death_filter = make_death_filter(probs, cols_to_id)
+        death_filter = build_death_filter(
+            panel_path, table, close, out_dir=root / "stat_arb" / "reporting" / "brackets")
 
     rows, series, robustness = [], {}, []
     for bracket in [b.strip() for b in args.brackets.split(",") if b.strip()]:
@@ -345,20 +375,26 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {bracket} / {treatment} / {arm} ...", flush=True)
                 try:
                     stats = run_arm(close, volume, table, refs, reference, 0,
-                                    member, index, **arm_kwargs(arm, death_filter))
+                                    member, index, record_insolvency=True,
+                                    **arm_kwargs(arm, death_filter))
                 except Exception as exc:
                     print(f"    failed: {type(exc).__name__}: {exc}")
                     continue
                 if stats is None:
                     print("    produced no positions, skipped")
                     continue
-                if bracket == ROBUSTNESS_BRACKET:
-                    robustness.append(robustness_row(
+                meta = dict(bracket=bracket, treatment=treatment, arm=arm,
+                            halflife=(EWMA_DEFAULT_HALFLIFE
+                                      if arm in ("ewma", "ewma_sized") else np.nan),
+                            role="arm")
+                if stats["status"] == "insolvent":
+                    print(f"    insolvent on {stats['failure_date']}")
+                    if bracket == ROBUSTNESS_BRACKET:
+                        robustness.append(insolvent_robustness_row(stats, **meta))
+                elif bracket == ROBUSTNESS_BRACKET:
+                    robustness.append(dict(robustness_row(
                         stats["net_series_for_funding"].dropna(), stats["turnover"],
-                        bracket=bracket, treatment=treatment, arm=arm,
-                        halflife=(EWMA_DEFAULT_HALFLIFE
-                                  if arm in ("ewma", "ewma_sized") else np.nan),
-                        role="arm"))
+                        **meta), status="ok"))
                 for _k in ("net_series_for_funding", "weights"):
                     stats.pop(_k, None)
                 stats.update(bracket=bracket, treatment=treatment, arm=arm,
@@ -387,13 +423,18 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {ROBUSTNESS_BRACKET} / {treatment} / ewma halflife={hl:g} ...",
                       flush=True)
                 stats = run_arm(close, volume, table, refs, reference, 0, member, index,
-                                **arm_kwargs(f"ewma_hl{hl:g}"))
+                                record_insolvency=True, **arm_kwargs(f"ewma_hl{hl:g}"))
                 if stats is None:
                     continue
-                robustness.append(robustness_row(
-                    stats["net_series_for_funding"].dropna(), stats["turnover"],
-                    bracket=ROBUSTNESS_BRACKET, treatment=treatment, arm="ewma",
-                    halflife=hl, role="halflife_sweep"))
+                meta = dict(bracket=ROBUSTNESS_BRACKET, treatment=treatment, arm="ewma",
+                            halflife=hl, role="halflife_sweep")
+                if stats["status"] == "insolvent":
+                    print(f"    insolvent on {stats['failure_date']}")
+                    robustness.append(insolvent_robustness_row(stats, **meta))
+                else:
+                    robustness.append(dict(robustness_row(
+                        stats["net_series_for_funding"].dropna(), stats["turnover"],
+                        **meta), status="ok"))
 
     if not rows:
         print("no arm produced a result")
@@ -408,8 +449,14 @@ def main(argv: list[str] | None = None) -> int:
         # DSR wants PER-PERIOD Sharpes, and net_sharpe is annualised. Passing
         # the annualised figures inflates the cross-trial variance by 365 and
         # drives the deflated Sharpe to exactly zero for every arm, which is
-        # what the first run reported.
-        trial_sharpes = [float(x["net_sharpe"]) / np.sqrt(365.0) for x in family]
+        # what the first run reported. Insolvent arms still count as trials but
+        # have no Sharpe to contribute to the variance, and get no DSR.
+        trial_sharpes = [float(x["net_sharpe"]) / np.sqrt(365.0) for x in family
+                         if x["status"] == "ok"]
+        if r["status"] != "ok":
+            r.pop("net_series", None)
+            r["dsr"] = np.nan
+            continue
         try:
             r["dsr"] = float(deflated_sharpe_ratio(
                 r.pop("net_series"), n_trials=len(family),
@@ -447,8 +494,9 @@ def main(argv: list[str] | None = None) -> int:
             rob["halflife"] == EWMA_DEFAULT_HALFLIFE
         year_cols = sorted(c for c in rob.columns if c.startswith("sharpe_")
                            and c != "sharpe_ex_best")
-        front = ["bracket", "treatment", "arm", "role", "halflife", "is_default",
-                 "net_sharpe", "sharpe_ex_best", "best_days_share", "turnover", "n_days"]
+        front = ["bracket", "treatment", "arm", "role", "halflife", "is_default", "status",
+                 "failure_date", "net_sharpe", "sharpe_ex_best", "best_days_share",
+                 "turnover", "n_days"]
         rob = rob[[c for c in front if c in rob.columns] + year_cols]
         rob.to_csv(out_dir / "ewma_robustness_corrected.csv", index=False)
 
@@ -463,9 +511,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"{100 * r['best_days_share']:12.1f}% {r['turnover']:9.3f}")
         print(f"  * pre-set default half-life ({EWMA_DEFAULT_HALFLIFE:g} days); the other")
         print("    rows are robustness, not selection")
-        print(f"  saved -> {out_dir / 'ewma_robustness.csv'}")
+        print(f"  saved -> {out_dir / 'ewma_robustness_corrected.csv'}")
 
-    print(f"\nsaved -> {out_dir / 'signal_ablation.csv'}")
+    print(f"\nsaved -> {out_dir / 'signal_ablation_corrected.csv'}")
     return 0
 
 

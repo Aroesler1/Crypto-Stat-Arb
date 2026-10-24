@@ -354,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  published buy-and-hold reference: EW {PUBLISHED_EW_BIAS:.2%}, "
               f"VW {PUBLISHED_VW_BIAS:.2%}")
 
-    print(f"\nsaved -> {out_dir / 'pit_vs_survivor.csv'}")
+    print(f"\nsaved -> {out_dir / 'pit_vs_survivor_corrected.csv'}")
     return 0
 
 
